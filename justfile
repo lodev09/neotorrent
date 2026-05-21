@@ -26,8 +26,14 @@ app: bindings xcode
         -destination 'platform=macOS,arch=arm64' \
         build
 
-# Build + launch.
-run: app
+# Swift-only rebuild + launch (skips Rust + xcodegen; use after UI tweaks).
+run:
+    xcodebuild \
+        -project apps/NeoTorrent/NeoTorrent.xcodeproj \
+        -scheme NeoTorrent \
+        -configuration Debug \
+        -destination 'platform=macOS,arch=arm64' \
+        build
     open ~/Library/Developer/Xcode/DerivedData/NeoTorrent-*/Build/Products/Debug/NeoTorrent.app
 
 # Release build of the .app.
