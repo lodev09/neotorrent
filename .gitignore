@@ -24,5 +24,9 @@ apps/NeoTorrent/NeoTorrent/Info.plist
 .vscode/
 *.swp
 
+# Release artifacts
+/build/
+/dist/
+
 # Claude Code per-machine permissions
 .claude/settings.local.json

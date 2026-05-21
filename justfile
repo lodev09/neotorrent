@@ -39,7 +39,12 @@ release:
         -scheme NeoTorrent \
         -configuration Release \
         -destination 'platform=macOS,arch=arm64' \
+        -derivedDataPath build \
         build
+
+# Package the release .app into a DMG (ad-hoc signed; for local layout testing).
+dmg: release
+    APP_PATH="$PWD/build/Build/Products/Release/NeoTorrent.app" ./scripts/package-dmg.sh
 
 # ── Quality ──────────────────────────────────────────────────────────────
 
@@ -75,3 +80,4 @@ clean:
     rm -rf apps/NeoTorrent/NeoTorrent.xcodeproj
     rm -rf apps/NeoTorrent/NeoTorrent/Info.plist
     rm -rf apps/NeoTorrent/build
+    rm -rf build dist

@@ -1,0 +1,171 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 0.1.0). Used for the DMG filename and bundle version.'
+        required: true
+      publish:
+        description: 'Create a GitHub release and upload the DMG'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            PUBLISH="true"
+          else
+            VERSION="${{ inputs.version }}"
+            PUBLISH="${{ inputs.publish }}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION (publish=$PUBLISH)"
+
+      - name: Install build tools
+        run: brew install xcodegen create-dmg just
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Patch version into project.yml
+        run: |
+          /usr/bin/sed -i '' \
+            -e 's/CFBundleShortVersionString: "[^"]*"/CFBundleShortVersionString: "${{ steps.version.outputs.version }}"/' \
+            -e "s/CFBundleVersion: \"[^\"]*\"/CFBundleVersion: \"${GITHUB_RUN_NUMBER}\"/" \
+            apps/NeoTorrent/project.yml
+
+      - name: Import signing certificate
+        env:
+          CERT_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+
+          echo -n "$CERT_P12_BASE64" | base64 --decode -o "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychain -d user | xargs)
+
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: Build Rust core + bindings
+        run: PROFILE=release ./scripts/build-rust.sh
+
+      - name: Generate Xcode project
+        working-directory: apps/NeoTorrent
+        run: xcodegen generate
+
+      - name: Build signed app
+        env:
+          DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcodebuild \
+            -project apps/NeoTorrent/NeoTorrent.xcodeproj \
+            -scheme NeoTorrent \
+            -configuration Release \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath build \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Developer ID Application" \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            OTHER_CODE_SIGN_FLAGS="--timestamp --options runtime" \
+            clean build
+
+      - name: Verify signature
+        run: |
+          APP="build/Build/Products/Release/NeoTorrent.app"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dvv "$APP"
+
+      - name: Notarize app
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          APP="build/Build/Products/Release/NeoTorrent.app"
+          ZIP="$RUNNER_TEMP/NeoTorrent.zip"
+          /usr/bin/ditto -c -k --keepParent "$APP" "$ZIP"
+
+          xcrun notarytool submit "$ZIP" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --wait
+
+          xcrun stapler staple "$APP"
+
+      - name: Package DMG
+        run: |
+          APP_PATH="$PWD/build/Build/Products/Release/NeoTorrent.app" \
+            VERSION="${{ steps.version.outputs.version }}" \
+            ./scripts/package-dmg.sh
+
+      - name: Sign + notarize DMG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          DMG="dist/NeoTorrent-${{ steps.version.outputs.version }}.dmg"
+          codesign --sign "Developer ID Application" --timestamp "$DMG"
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --wait
+          xcrun stapler staple "$DMG"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NeoTorrent-${{ steps.version.outputs.version }}-dmg
+          path: dist/NeoTorrent-${{ steps.version.outputs.version }}.dmg
+          if-no-files-found: error
+
+      - name: Create GitHub release
+        if: steps.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="v$VERSION"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --generate-notes \
+              "dist/NeoTorrent-$VERSION.dmg"
+          else
+            gh release upload "$TAG" "dist/NeoTorrent-$VERSION.dmg" --clobber
+          fi
+
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
