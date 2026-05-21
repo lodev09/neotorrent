@@ -19,6 +19,7 @@ pub struct ParsedMagnet {
 #[derive(uniffi::Record)]
 pub struct TorrentSnapshot {
     pub id: u64,
+    pub info_hash: String,
     pub name: Option<String>,
     pub total_bytes: u64,
     pub downloaded_bytes: u64,
@@ -57,6 +58,7 @@ impl From<CoreSnapshot> for TorrentSnapshot {
     fn from(s: CoreSnapshot) -> Self {
         Self {
             id: s.id,
+            info_hash: s.info_hash,
             name: s.name,
             total_bytes: s.total_bytes,
             downloaded_bytes: s.downloaded_bytes,

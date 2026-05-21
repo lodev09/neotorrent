@@ -6,12 +6,12 @@ import UserNotifications
 struct ContentView: View {
     @Environment(SessionHolder.self) private var sessionHolder
     @Environment(Preferences.self) private var prefs
-    @State private var addError: String?
     @State private var torrents: [TorrentSnapshot] = []
     @State private var expandedIDs: Set<UInt64> = []
     @State private var notifiedFinishedIDs: Set<UInt64> = []
+    @State private var removingIDs: Set<UInt64> = []
+    @State private var didInitialLoad = false
 
-    private var activeCount: Int { torrents.filter { !$0.isFinished }.count }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -22,28 +22,37 @@ struct ContentView: View {
             } else {
                 torrentList
             }
-            if let err = addError {
-                HStack(spacing: 6) {
-                    Label(err, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
-                        .font(.caption)
+            if let err = sessionHolder.addError {
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.orange)
+                    Text(err)
+                        .font(.callout)
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
                     Spacer()
                     Button {
-                        addError = nil
+                        sessionHolder.addError = nil
                     } label: {
                         Image(systemName: "xmark")
-                            .font(.caption)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.secondary)
+                    .buttonStyle(.plain)
+                    .help("Dismiss")
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 6)
-                .background(.bar)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 14)
+                .background(.regularMaterial)
+                .overlay(Divider(), alignment: .top)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: sessionHolder.addError)
         .navigationTitle("NeoTorrent")
-        .navigationSubtitle(torrents.isEmpty ? "" : "\(activeCount) active / \(torrents.count) total")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button(action: pickTorrentFile) {
@@ -57,33 +66,56 @@ struct ContentView: View {
         .onPasteCommand(of: [UTType.url.identifier, UTType.plainText.identifier], perform: handlePastedItems)
         .task { await pollLoop() }
         .task { await requestNotificationAuth() }
+        .task(id: sessionHolder.addError) {
+            guard sessionHolder.addError != nil else { return }
+            try? await Task.sleep(for: .seconds(5))
+            sessionHolder.addError = nil
+        }
     }
 
     private var torrentList: some View {
-        VStack(spacing: 10) {
-            ForEach(sessionHolder.pendingAdds) { p in
-                PendingRow(name: p.name)
+        ScrollView {
+            VStack(spacing: 10) {
+                ForEach(torrents, id: \.id) { t in
+                    TorrentRow(
+                        torrent: t,
+                        expanded: expandedIDs.contains(t.id),
+                        onToggle: { toggleExpanded(t.id) },
+                        onPause: {
+                            playSound("Morse")
+                            Task { try? await sessionHolder.session?.pause(id: t.id) }
+                        },
+                        onResume: {
+                            playSound("Morse")
+                            Task { try? await sessionHolder.session?.resume(id: t.id) }
+                        },
+                        onRemove: { deleteFiles in
+                            playSound("Bottle")
+                            removingIDs.insert(t.id)
+                            torrents.removeAll { $0.id == t.id }
+                            notifiedFinishedIDs.remove(t.id)
+                            Task {
+                                try? await sessionHolder.session?.remove(id: t.id, deleteFiles: deleteFiles)
+                                removingIDs.remove(t.id)
+                            }
+                        },
+                        onReveal: { revealInFinder(id: t.id) },
+                        onToggleFile: { file, isSelected in
+                            Task { await toggleFile(torrentID: t.id, file: file, isSelected: isSelected) }
+                        },
+                        files: { sessionHolder.session.flatMap { try? $0.files(id: t.id) } ?? [] }
+                    )
+                }
+                ForEach(sessionHolder.pendingAdds) { p in
+                    PendingRow(name: p.name, onRemove: {
+                        playSound("Bottle")
+                        sessionHolder.cancelPending(p.id)
+                    })
+                }
+                dropHint
             }
-            ForEach(torrents, id: \.id) { t in
-                TorrentRow(
-                    torrent: t,
-                    expanded: expandedIDs.contains(t.id),
-                    onToggle: { toggleExpanded(t.id) },
-                    onPause: { Task { try? await sessionHolder.session?.pause(id: t.id) } },
-                    onResume: { Task { try? await sessionHolder.session?.resume(id: t.id) } },
-                    onRemove: { deleteFiles in
-                        Task { try? await sessionHolder.session?.remove(id: t.id, deleteFiles: deleteFiles) }
-                    },
-                    onReveal: { revealInFinder(id: t.id) },
-                    onToggleFile: { file, isSelected in
-                        Task { await toggleFile(torrentID: t.id, file: file, isSelected: isSelected) }
-                    },
-                    files: { sessionHolder.session.flatMap { try? $0.files(id: t.id) } ?? [] }
-                )
-            }
-            dropHint
+            .padding([.horizontal, .bottom], 12)
         }
-        .padding(12)
     }
 
     private var dropHint: some View {
@@ -96,12 +128,12 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, torrents.isEmpty ? 56 : 20)
+        .padding(.vertical, 36)
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(
-                    Color.secondary.opacity(0.25),
-                    style: StrokeStyle(lineWidth: 1, dash: [5])
+                    Color.secondary.opacity(0.3),
+                    style: StrokeStyle(lineWidth: 1.5, dash: [6])
                 )
         )
     }
@@ -128,11 +160,11 @@ struct ContentView: View {
         panel.message = "Choose .torrent file(s) to add"
         guard panel.runModal() == .OK else { return }
         let urls = panel.urls
-        addError = nil
+        sessionHolder.addError = nil
         Task {
             for url in urls {
                 do { _ = try await sessionHolder.add(uri: url.path) }
-                catch { addError = error.localizedDescription }
+                catch { sessionHolder.addError = (error as? AddTorrentError)?.errorDescription ?? error.localizedDescription }
             }
             await refresh()
         }
@@ -145,12 +177,12 @@ struct ContentView: View {
                 let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { return }
                 Task { @MainActor in
-                    addError = nil
+                    sessionHolder.addError = nil
                     do {
                         _ = try await sessionHolder.add(uri: trimmed)
                         await refresh()
                     } catch {
-                        addError = error.localizedDescription
+                        sessionHolder.addError = (error as? AddTorrentError)?.errorDescription ?? error.localizedDescription
                     }
                 }
             }
@@ -159,11 +191,11 @@ struct ContentView: View {
 
     private func handleDroppedFiles(_ urls: [URL]) {
         Task {
-            addError = nil
+            sessionHolder.addError = nil
             for url in urls where url.pathExtension.lowercased() == "torrent" {
                 let uri = url.isFileURL ? url.path : url.absoluteString
                 do { _ = try await sessionHolder.add(uri: uri) } catch {
-                    addError = error.localizedDescription
+                    sessionHolder.addError = (error as? AddTorrentError)?.errorDescription ?? error.localizedDescription
                 }
             }
             await refresh()
@@ -173,20 +205,28 @@ struct ContentView: View {
     private func refresh() async {
         guard let session = sessionHolder.session else { return }
         let updated = session.list()
+        let previousIDs = Set(torrents.map { $0.id })
+        let newlyAdded = updated.filter { !previousIDs.contains($0.id) }
 
         for t in updated {
             if t.isFinished && !notifiedFinishedIDs.contains(t.id) {
                 if let prev = torrents.first(where: { $0.id == t.id }), !prev.isFinished {
                     postCompletionNotification(for: t)
-                    if prefs.completionSound {
-                        NSSound(named: "Glass")?.play()
-                    }
+                    playSound("Glass")
                 }
                 notifiedFinishedIDs.insert(t.id)
             }
         }
 
         torrents = updated
+            .filter { !removingIDs.contains($0.id) }
+            .sorted { $0.id < $1.id }
+        sessionHolder.reconcilePending(against: Set(updated.map { $0.id }))
+
+        if didInitialLoad && !newlyAdded.isEmpty {
+            playSound("Pop")
+        }
+        didInitialLoad = true
     }
 
     private func pollLoop() async {
@@ -208,6 +248,11 @@ struct ContentView: View {
             indices = current.map { $0.index }
         }
         try? await session.setOnlyFiles(id: torrentID, indices: indices)
+    }
+
+    private func playSound(_ name: String) {
+        guard prefs.playSounds else { return }
+        NSSound(named: name)?.play()
     }
 
     private func requestNotificationAuth() async {
@@ -241,52 +286,74 @@ struct TorrentRow: View {
     let files: () -> [TorrentFile]
 
     @State private var confirmingRemove = false
+    @State private var isHovered = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Button(action: onToggle) {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .frame(width: 14)
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    Button(action: paused ? onResume : onPause) {
+                        Image(systemName: iconName)
+                            .font(.title2)
+                            .foregroundStyle(stateColor)
+                    }
+                    .buttonStyle(.plain)
+                    .help(paused ? "Resume" : "Pause")
+                    Text(torrent.name ?? "fetching metadata…")
+                        .font(.title3.weight(.semibold))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                    controls
+                        .opacity(isHovered ? 1 : 0)
+                        .allowsHitTesting(isHovered)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.tertiary)
-                Image(systemName: iconName)
-                    .font(.title3)
-                    .foregroundStyle(stateColor)
-                Text(torrent.name ?? "fetching metadata…")
-                    .font(.headline)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer()
-                statePill
-                controls
+                .frame(height: 24)
+                HStack(spacing: 12) {
+                    HStack(spacing: 6) {
+                        ProgressView(value: torrent.progress)
+                            .progressViewStyle(.linear)
+                            .tint(stateColor)
+                            .frame(width: 100)
+                        Text(String(format: "%.0f%%", torrent.progress * 100))
+                            .font(.callout.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 40, alignment: .leading)
+                    }
+                    .fixedSize()
+                    if paused {
+                        Text("Paused")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    } else {
+                        stat("Down", formatRate(torrent.downloadBps))
+                        stat("Up", formatRate(torrent.uploadBps))
+                        stat("Peers", "\(torrent.peersLive)/\(torrent.peersSeen)")
+                        Spacer()
+                        Text("\(formatBytes(torrent.downloadedBytes)) / \(formatBytes(torrent.totalBytes))")
+                            .font(.callout.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
-            ProgressView(value: torrent.progress)
-                .progressViewStyle(.linear)
-                .tint(stateColor)
-            HStack(spacing: 18) {
-                stat("Progress", String(format: "%.1f%%", torrent.progress * 100))
-                stat("Down", formatRate(torrent.downloadBps))
-                stat("Up", formatRate(torrent.uploadBps))
-                stat("Peers", "\(torrent.peersLive)/\(torrent.peersSeen)")
-                Spacer()
-                Text("\(formatBytes(torrent.downloadedBytes)) / \(formatBytes(torrent.totalBytes))")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .contentShape(Rectangle())
+            .onTapGesture { onToggle() }
             if expanded {
-                Divider()
                 FileList(files: files(), onToggle: onToggleFile)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 14)
             }
         }
-        .padding(14)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.07), lineWidth: 0.5)
+                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
         )
+        .shadow(color: Color.black.opacity(0.08), radius: 3, y: 1)
+        .onHover { isHovered = $0 }
         .confirmationDialog(
             "Remove \(torrent.name ?? "torrent")?",
             isPresented: $confirmingRemove,
@@ -298,23 +365,10 @@ struct TorrentRow: View {
         }
     }
 
-    private var statePill: some View {
-        Text(torrent.state)
-            .font(.caption2.weight(.semibold))
-            .textCase(.uppercase)
-            .foregroundStyle(stateColor)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(stateColor.opacity(0.15), in: Capsule())
-    }
+    private var paused: Bool { torrent.state.lowercased() == "paused" }
 
     @ViewBuilder
     private var controls: some View {
-        let paused = torrent.state.lowercased() == "paused"
-        Button(action: paused ? onResume : onPause) {
-            Image(systemName: paused ? "play.fill" : "pause.fill")
-        }
-        .help(paused ? "Resume" : "Pause")
         Button(action: onReveal) {
             Image(systemName: "folder")
         }
@@ -329,8 +383,7 @@ struct TorrentRow: View {
 
     private var iconName: String {
         if torrent.isFinished { return "checkmark.circle.fill" }
-        if torrent.state.lowercased() == "paused" { return "pause.circle.fill" }
-        return "arrow.down.circle.fill"
+        return paused ? "arrow.clockwise.circle.fill" : "pause.circle.fill"
     }
 
     private var stateColor: Color {
@@ -342,10 +395,10 @@ struct TorrentRow: View {
     private func stat(_ label: String, _ value: String) -> some View {
         HStack(spacing: 4) {
             Text(label)
-                .font(.caption2.weight(.semibold))
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(.tertiary)
             Text(value)
-                .font(.caption.monospacedDigit())
+                .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
     }
@@ -353,26 +406,55 @@ struct TorrentRow: View {
 
 struct PendingRow: View {
     let name: String
+    let onRemove: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            ProgressView()
-                .controlSize(.small)
-            Text(name)
-                .font(.headline)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Text("Adding…")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer()
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(.blue)
+                Text(name)
+                    .font(.title3.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
+                Button(action: onRemove) {
+                    Image(systemName: "trash")
+                }
+                .help("Cancel add")
+                .opacity(isHovered ? 1 : 0)
+                .allowsHitTesting(isHovered)
+            }
+            .frame(height: 24)
+            HStack(spacing: 6) {
+                ProgressView()
+                    .progressViewStyle(.linear)
+                    .tint(.secondary)
+                    .frame(width: 100)
+                    .fixedSize()
+                Text("Adding…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
         }
-        .padding(14)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.07), lineWidth: 0.5)
-        )
+        .cardChrome()
+        .onHover { isHovered = $0 }
+    }
+}
+
+extension View {
+    func cardChrome() -> some View {
+        self
+            .padding(14)
+            .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+            )
+            .shadow(color: Color.black.opacity(0.08), radius: 3, y: 1)
     }
 }
 
@@ -387,34 +469,34 @@ struct FileList: View {
                 Text("File list available after metadata resolves")
                     .font(.caption).foregroundStyle(.tertiary)
             }
-            .padding(.leading, 22)
         } else {
+            let showCheckbox = files.count > 1
             VStack(alignment: .leading, spacing: 3) {
                 ForEach(files, id: \.index) { f in
                     HStack(spacing: 6) {
-                        Toggle("", isOn: Binding(
-                            get: { f.selected },
-                            set: { onToggle(f, $0) }
-                        ))
-                        .toggleStyle(.checkbox)
-                        .labelsHidden()
+                        if showCheckbox {
+                            Toggle("", isOn: Binding(
+                                get: { f.selected },
+                                set: { onToggle(f, $0) }
+                            ))
+                            .toggleStyle(.checkbox)
+                            .labelsHidden()
+                        }
                         Image(systemName: fileIcon(f))
                             .foregroundStyle(fileIconColor(f))
-                            .imageScale(.small)
                         Text(f.path)
-                            .font(.system(.caption, design: .monospaced))
+                            .font(.system(.callout, design: .monospaced))
                             .foregroundStyle(f.selected ? .primary : .tertiary)
                             .strikethrough(!f.selected)
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Spacer()
                         Text(progressText(f))
-                            .font(.caption.monospacedDigit())
+                            .font(.callout.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
                 }
             }
-            .padding(.leading, 22)
         }
     }
 
@@ -469,6 +551,7 @@ private func formatBytes(_ b: UInt64) -> String {
     let f = ByteCountFormatter()
     f.allowedUnits = [.useKB, .useMB, .useGB, .useTB]
     f.countStyle = .file
+    f.allowsNonnumericFormatting = false
     return f.string(fromByteCount: Int64(b))
 }
 

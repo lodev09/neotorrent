@@ -7,7 +7,7 @@ final class Preferences {
     static let downloadDirKey = "preferences.downloadDir"
     static let downloadKBpsKey = "preferences.downloadKBps"
     static let uploadKBpsKey = "preferences.uploadKBps"
-    static let completionSoundKey = "preferences.completionSound"
+    static let playSoundsKey = "preferences.playSounds"
 
     var downloadDir: String {
         didSet { UserDefaults.standard.set(downloadDir, forKey: Self.downloadDirKey) }
@@ -26,8 +26,8 @@ final class Preferences {
         }
     }
     /// Play a chime when a torrent finishes.
-    var completionSound: Bool {
-        didSet { UserDefaults.standard.set(completionSound, forKey: Self.completionSoundKey) }
+    var playSounds: Bool {
+        didSet { UserDefaults.standard.set(playSounds, forKey: Self.playSoundsKey) }
     }
 
     var sessionDownloadDir: String = ""
@@ -43,7 +43,7 @@ final class Preferences {
         self.downloadKBps = d.integer(forKey: Self.downloadKBpsKey)
         self.uploadKBps = d.integer(forKey: Self.uploadKBpsKey)
         // For bools, default to true if never set.
-        self.completionSound = d.object(forKey: Self.completionSoundKey) as? Bool ?? true
+        self.playSounds = d.object(forKey: Self.playSoundsKey) as? Bool ?? true
     }
 
     func attach(_ session: NeoTorrentSession, sessionDir: String) {
@@ -111,7 +111,7 @@ struct SettingsView: View {
             }
 
             Section("Behavior") {
-                Toggle("Play sound when downloads finish", isOn: $bindable.completionSound)
+                Toggle("Play sound effects", isOn: $bindable.playSounds)
             }
 
             Section("System") {
@@ -134,7 +134,7 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 520)
-        .padding()
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func defaultAppRow(

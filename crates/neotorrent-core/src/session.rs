@@ -203,6 +203,7 @@ pub struct FileEntry {
 #[derive(Debug, Clone)]
 pub struct TorrentSnapshot {
     pub id: u64,
+    pub info_hash: String,
     pub name: Option<String>,
     pub total_bytes: u64,
     pub downloaded_bytes: u64,
@@ -221,6 +222,7 @@ pub fn snapshot(handle: &Arc<ManagedTorrent>) -> TorrentSnapshot {
     let live = stats.live.as_ref();
     TorrentSnapshot {
         id: handle.id() as u64,
+        info_hash: handle.info_hash().as_string(),
         name: handle.name(),
         total_bytes: stats.total_bytes,
         downloaded_bytes: stats.progress_bytes,

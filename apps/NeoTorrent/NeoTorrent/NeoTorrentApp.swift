@@ -15,7 +15,7 @@ struct NeoTorrentApp: App {
             ContentView()
                 .environment(sessionHolder)
                 .environment(prefs)
-                .frame(minWidth: 560, minHeight: 200)
+                .frame(minWidth: 640, idealWidth: 820, minHeight: 480, idealHeight: 640)
                 .task { await start() }
                 .onOpenURL { url in
                     sessionHolder.handleOpenURL(url)
@@ -23,12 +23,12 @@ struct NeoTorrentApp: App {
         }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified)
-        .windowResizability(.contentSize)
 
         Settings {
             SettingsView()
                 .environment(prefs)
         }
+        .windowResizability(.contentSize)
     }
 
     private func start() async {
@@ -42,6 +42,17 @@ struct NeoTorrentApp: App {
 struct PendingTorrent: Identifiable {
     let id = UUID()
     var name: String
+    var torrentID: UInt64?
+}
+
+enum AddTorrentError: LocalizedError {
+    case alreadyAdded(name: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .alreadyAdded(let name): return "“\(name)” is already in your list"
+        }
+    }
 }
 
 @MainActor
@@ -49,8 +60,10 @@ struct PendingTorrent: Identifiable {
 final class SessionHolder {
     var session: NeoTorrentSession?
     var startupError: String?
+    var addError: String?
     var pendingAdds: [PendingTorrent] = []
     private var preStartQueue: [String] = []
+    private var cancelledPending: Set<UUID> = []
 
     func start(downloadDir: String) async {
         guard session == nil else { return }
@@ -77,10 +90,53 @@ final class SessionHolder {
             preStartQueue.append(uri)
             return nil
         }
+        let existing = session.list()
+        if uri.hasPrefix("magnet:"), let parsed = try? parseMagnet(uri: uri),
+           let match = existing.first(where: { $0.infoHash.caseInsensitiveCompare(parsed.infoHash) == .orderedSame })
+        {
+            throw AddTorrentError.alreadyAdded(name: match.name ?? parsed.displayName ?? "Magnet")
+        }
+        let existingIDs = Set(existing.map { $0.id })
         let entry = PendingTorrent(name: displayName(for: uri))
         pendingAdds.append(entry)
-        defer { pendingAdds.removeAll { $0.id == entry.id } }
-        return try await session.addMagnet(uri: uri)
+        do {
+            let id = try await session.addMagnet(uri: uri)
+            if cancelledPending.contains(entry.id) {
+                cancelledPending.remove(entry.id)
+                try? await session.remove(id: id, deleteFiles: false)
+                return id
+            }
+            if existingIDs.contains(id) {
+                pendingAdds.removeAll { $0.id == entry.id }
+                let existingName = session.list().first(where: { $0.id == id })?.name ?? entry.name
+                throw AddTorrentError.alreadyAdded(name: existingName)
+            }
+            if let i = pendingAdds.firstIndex(where: { $0.id == entry.id }) {
+                pendingAdds[i].torrentID = id
+            }
+            return id
+        } catch {
+            pendingAdds.removeAll { $0.id == entry.id }
+            cancelledPending.remove(entry.id)
+            throw error
+        }
+    }
+
+    func cancelPending(_ pendingID: UUID) {
+        let entry = pendingAdds.first { $0.id == pendingID }
+        pendingAdds.removeAll { $0.id == pendingID }
+        if let torrentID = entry?.torrentID, let session {
+            Task { try? await session.remove(id: torrentID, deleteFiles: false) }
+        } else {
+            cancelledPending.insert(pendingID)
+        }
+    }
+
+    func reconcilePending(against torrentIDs: Set<UInt64>) {
+        pendingAdds.removeAll { p in
+            guard let tid = p.torrentID else { return false }
+            return torrentIDs.contains(tid)
+        }
     }
 
     func handleOpenURL(_ url: URL) {
@@ -92,7 +148,17 @@ final class SessionHolder {
         } else {
             return
         }
-        Task { _ = try? await add(uri: uri) }
+        Task {
+            do { _ = try await add(uri: uri) }
+            catch { addError = errorMessage(error) }
+        }
+    }
+
+    private func errorMessage(_ error: Error) -> String {
+        if let e = error as? AddTorrentError {
+            return e.errorDescription ?? String(describing: e)
+        }
+        return error.localizedDescription
     }
 
     private func displayName(for uri: String) -> String {
