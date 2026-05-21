@@ -1,0 +1,87 @@
+name: Lorrent
+options:
+  bundleIdPrefix: com.lodev09
+  deploymentTarget:
+    macOS: "15.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    ARCHS: arm64
+    ONLY_ACTIVE_ARCH: YES
+    SWIFT_STRICT_CONCURRENCY: complete
+
+targets:
+  Lorrent:
+    type: application
+    platform: macOS
+    sources:
+      - path: Lorrent
+        excludes:
+          - "Generated/*.a"
+    info:
+      path: Lorrent/Info.plist
+      properties:
+        CFBundleDisplayName: Lorrent
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        CFBundlePackageType: APPL
+        LSApplicationCategoryType: public.app-category.utilities
+        NSHumanReadableCopyright: "Copyright © 2026 Jovanni Lo"
+        # Register lorrent as the handler for magnet: links.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.lodev09.lorrent.magnet
+            CFBundleTypeRole: Editor
+            CFBundleURLSchemes:
+              - magnet
+        # Register lorrent as a handler for .torrent files.
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: BitTorrent file
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Default
+            LSItemContentTypes:
+              - org.bittorrent.torrent
+            CFBundleTypeExtensions:
+              - torrent
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: org.bittorrent.torrent
+            UTTypeDescription: BitTorrent file
+            UTTypeConformsTo:
+              - public.data
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - torrent
+              public.mime-type:
+                - application/x-bittorrent
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lodev09.lorrent
+        PRODUCT_NAME: Lorrent
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+        SWIFT_INCLUDE_PATHS: "$(SRCROOT)/Lorrent/Generated"
+        LIBRARY_SEARCH_PATHS: "$(SRCROOT)/Lorrent/Generated"
+        OTHER_LDFLAGS: "-llorrent_ffi -lc++ -framework Security -framework SystemConfiguration"
+    entitlements:
+      path: Lorrent/Lorrent.entitlements
+      properties:
+        com.apple.security.app-sandbox: false
+        com.apple.security.network.client: true
+        com.apple.security.network.server: true
+        com.apple.security.files.user-selected.read-write: true
+        com.apple.security.files.downloads.read-write: true
+    scheme:
+      preActions:
+        - script: |
+            cd "$SRCROOT/../.."
+            ./scripts/build-rust.sh > "${TMPDIR:-/tmp}/lorrent-build-rust.log" 2>&1 || {
+                cat "${TMPDIR:-/tmp}/lorrent-build-rust.log" >&2
+                exit 1
+            }
+          name: Build Rust core
+          settingsTarget: Lorrent

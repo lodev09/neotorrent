@@ -1,0 +1,25 @@
+[package]
+name = "lorrent-ffi"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib", "cdylib"]
+name = "lorrent_ffi"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[features]
+default = []
+cli = ["uniffi/cli"]
+
+[dependencies]
+lorrent-core = { path = "../lorrent-core" }
+uniffi.workspace = true
+tokio.workspace = true
+thiserror.workspace = true

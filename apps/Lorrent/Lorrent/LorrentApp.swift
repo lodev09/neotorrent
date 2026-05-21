@@ -1,0 +1,77 @@
+import SwiftUI
+
+@main
+struct LorrentApp: App {
+    @State private var sessionHolder = SessionHolder()
+    @State private var prefs = Preferences()
+
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .environment(sessionHolder)
+                .environment(prefs)
+                .frame(minWidth: 720, minHeight: 480)
+                .task { await start() }
+                .onOpenURL { url in
+                    sessionHolder.handleOpenURL(url)
+                }
+        }
+        .windowStyle(.titleBar)
+        .windowToolbarStyle(.unified)
+
+        Settings {
+            SettingsView()
+                .environment(prefs)
+        }
+    }
+
+    private func start() async {
+        await sessionHolder.start(downloadDir: prefs.downloadDir)
+        if let session = sessionHolder.session {
+            prefs.attach(session, sessionDir: prefs.downloadDir)
+        }
+    }
+}
+
+@MainActor
+@Observable
+final class SessionHolder {
+    var session: LorrentSession?
+    var startupError: String?
+    private var pending: [String] = []
+
+    func start(downloadDir: String) async {
+        guard session == nil else { return }
+        let stateDir = (NSHomeDirectory() as NSString)
+            .appendingPathComponent("Library/Application Support/lorrent")
+        try? FileManager.default.createDirectory(atPath: downloadDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(atPath: stateDir, withIntermediateDirectories: true)
+        do {
+            let s = try await LorrentSession(downloadDir: downloadDir, stateDir: stateDir)
+            session = s
+            let queued = pending
+            pending.removeAll()
+            for uri in queued {
+                _ = try? await s.addMagnet(uri: uri)
+            }
+        } catch {
+            startupError = "Failed to start session: \(error.localizedDescription)"
+        }
+    }
+
+    func handleOpenURL(_ url: URL) {
+        let uri: String
+        if url.scheme == "magnet" {
+            uri = url.absoluteString
+        } else if url.isFileURL && url.pathExtension.lowercased() == "torrent" {
+            uri = url.path
+        } else {
+            return
+        }
+        if let session {
+            Task { _ = try? await session.addMagnet(uri: uri) }
+        } else {
+            pending.append(uri)
+        }
+    }
+}
