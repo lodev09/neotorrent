@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct LorrentApp: App {
+struct NeoTorrentApp: App {
     @State private var sessionHolder = SessionHolder()
     @State private var prefs = Preferences()
 
@@ -36,18 +36,18 @@ struct LorrentApp: App {
 @MainActor
 @Observable
 final class SessionHolder {
-    var session: LorrentSession?
+    var session: NeoTorrentSession?
     var startupError: String?
     private var pending: [String] = []
 
     func start(downloadDir: String) async {
         guard session == nil else { return }
         let stateDir = (NSHomeDirectory() as NSString)
-            .appendingPathComponent("Library/Application Support/lorrent")
+            .appendingPathComponent("Library/Application Support/neotorrent")
         try? FileManager.default.createDirectory(atPath: downloadDir, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(atPath: stateDir, withIntermediateDirectories: true)
         do {
-            let s = try await LorrentSession(downloadDir: downloadDir, stateDir: stateDir)
+            let s = try await NeoTorrentSession(downloadDir: downloadDir, stateDir: stateDir)
             session = s
             let queued = pending
             pending.removeAll()

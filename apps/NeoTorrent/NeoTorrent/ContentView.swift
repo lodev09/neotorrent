@@ -253,7 +253,7 @@ struct ContentView: View {
         content.body = t.name ?? "Torrent finished"
         content.sound = .default
         let req = UNNotificationRequest(
-            identifier: "lorrent-finished-\(t.id)",
+            identifier: "neotorrent-finished-\(t.id)",
             content: content,
             trigger: nil
         )

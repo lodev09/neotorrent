@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Build the Rust FFI lib and regenerate Swift bindings for Xcode.
-# Output lands in apps/Lorrent/Lorrent/Generated/ which Xcode pulls in.
+# Output lands in apps/NeoTorrent/NeoTorrent/Generated/ which Xcode pulls in.
 
 # Xcode's GUI launch gives this script a minimal PATH that excludes the user's
 # shell PATH, so cargo (and friends) may not be visible. Allow an explicit
@@ -28,14 +28,14 @@ fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-CRATE="lorrent-ffi"
-LIB_NAME="lorrent_ffi"
+CRATE="neotorrent-ffi"
+LIB_NAME="neotorrent_ffi"
 TARGET="aarch64-apple-darwin"
 PROFILE="${PROFILE:-release}"
 CARGO_PROFILE_DIR="$PROFILE"
 [ "$PROFILE" = "dev" ] && CARGO_PROFILE_DIR="debug"
 
-OUT_DIR="apps/Lorrent/Lorrent/Generated"
+OUT_DIR="apps/NeoTorrent/NeoTorrent/Generated"
 mkdir -p "$OUT_DIR"
 
 echo "==> cargo build ($PROFILE, $TARGET)"

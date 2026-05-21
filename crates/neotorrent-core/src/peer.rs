@@ -173,7 +173,7 @@ pub async fn create_offer(config: PeerConfig) -> Result<(String, OfferingPeer), 
 
     let dc = pc
         .create_data_channel(
-            "lorrent",
+            "neotorrent",
             Some(RTCDataChannelInit {
                 ordered: Some(true),
                 ..Default::default()

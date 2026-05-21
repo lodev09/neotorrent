@@ -1,12 +1,12 @@
 import AppKit
 import UniformTypeIdentifiers
 
-/// Helpers for checking and setting Lorrent as the macOS default handler for
+/// Helpers for checking and setting NeoTorrent as the macOS default handler for
 /// `magnet:` URLs and `.torrent` files.
 @MainActor
 enum DefaultAppHelper {
-    static var lorrentBundleURL: URL { Bundle.main.bundleURL }
-    static var lorrentBundleID: String? { Bundle.main.bundleIdentifier }
+    static var neotorrentBundleURL: URL { Bundle.main.bundleURL }
+    static var neotorrentBundleID: String? { Bundle.main.bundleIdentifier }
 
     static var magnetProbeURL: URL { URL(string: "magnet:?xt=urn:btih:0000000000000000000000000000000000000000")! }
 
@@ -19,14 +19,14 @@ enum DefaultAppHelper {
         guard let appURL = NSWorkspace.shared.urlForApplication(toOpen: magnetProbeURL) else {
             return false
         }
-        return appURL.standardizedFileURL == lorrentBundleURL.standardizedFileURL
+        return appURL.standardizedFileURL == neotorrentBundleURL.standardizedFileURL
     }
 
     static var isDefaultForTorrent: Bool {
         guard let appURL = NSWorkspace.shared.urlForApplication(toOpen: torrentContentType) else {
             return false
         }
-        return appURL.standardizedFileURL == lorrentBundleURL.standardizedFileURL
+        return appURL.standardizedFileURL == neotorrentBundleURL.standardizedFileURL
     }
 
     static func currentMagnetHandlerName() -> String? {
@@ -46,7 +46,7 @@ enum DefaultAppHelper {
     static func setAsDefaultForMagnet() async -> Error? {
         do {
             try await NSWorkspace.shared.setDefaultApplication(
-                at: lorrentBundleURL,
+                at: neotorrentBundleURL,
                 toOpenURLsWithScheme: "magnet"
             )
             return nil
@@ -58,7 +58,7 @@ enum DefaultAppHelper {
     static func setAsDefaultForTorrent() async -> Error? {
         do {
             try await NSWorkspace.shared.setDefaultApplication(
-                at: lorrentBundleURL,
+                at: neotorrentBundleURL,
                 toOpen: torrentContentType
             )
             return nil

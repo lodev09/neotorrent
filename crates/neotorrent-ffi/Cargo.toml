@@ -1,5 +1,5 @@
 [package]
-name = "lorrent-ffi"
+name = "neotorrent-ffi"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -7,7 +7,7 @@ license.workspace = true
 
 [lib]
 crate-type = ["staticlib", "cdylib"]
-name = "lorrent_ffi"
+name = "neotorrent_ffi"
 
 [[bin]]
 name = "uniffi-bindgen"
@@ -19,7 +19,7 @@ default = []
 cli = ["uniffi/cli"]
 
 [dependencies]
-lorrent-core = { path = "../lorrent-core" }
+neotorrent-core = { path = "../neotorrent-core" }
 uniffi.workspace = true
 tokio.workspace = true
 thiserror.workspace = true

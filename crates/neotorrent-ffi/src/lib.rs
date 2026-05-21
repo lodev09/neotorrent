@@ -2,10 +2,10 @@ uniffi::setup_scaffolding!();
 
 use std::sync::Arc;
 
-use lorrent_core::engine::DEFAULT_WS_TRACKERS;
-use lorrent_core::magnet::{self, MagnetError, MagnetLink};
-use lorrent_core::session::{
-    snapshot, FileEntry as CoreFileEntry, LorrentSession as CoreSession, SessionError,
+use neotorrent_core::engine::DEFAULT_WS_TRACKERS;
+use neotorrent_core::magnet::{self, MagnetError, MagnetLink};
+use neotorrent_core::session::{
+    snapshot, FileEntry as CoreFileEntry, NeoTorrentSession as CoreSession, SessionError,
     TorrentSnapshot as CoreSnapshot,
 };
 
@@ -74,20 +74,20 @@ impl From<CoreSnapshot> for TorrentSnapshot {
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 #[uniffi(flat_error)]
-pub enum LorrentError {
+pub enum NeoTorrentError {
     #[error("invalid magnet: {0}")]
     InvalidMagnet(String),
     #[error("session: {0}")]
     Session(String),
 }
 
-impl From<MagnetError> for LorrentError {
+impl From<MagnetError> for NeoTorrentError {
     fn from(e: MagnetError) -> Self {
         Self::InvalidMagnet(e.to_string())
     }
 }
 
-impl From<SessionError> for LorrentError {
+impl From<SessionError> for NeoTorrentError {
     fn from(e: SessionError) -> Self {
         Self::Session(e.to_string())
     }
@@ -95,12 +95,12 @@ impl From<SessionError> for LorrentError {
 
 #[uniffi::export]
 pub fn hello_from_rust() -> String {
-    lorrent_core::greet()
+    neotorrent_core::greet()
 }
 
 /// Client-side parse + tracker preview (includes WebTorrent defaults).
 #[uniffi::export]
-pub fn parse_magnet(uri: String) -> Result<ParsedMagnet, LorrentError> {
+pub fn parse_magnet(uri: String) -> Result<ParsedMagnet, NeoTorrentError> {
     let link = MagnetLink::parse(&uri)?;
     let mut seen = std::collections::HashSet::new();
     let mut ws_trackers = Vec::new();
@@ -123,53 +123,53 @@ pub fn parse_magnet(uri: String) -> Result<ParsedMagnet, LorrentError> {
 
 /// Long-lived torrent session backed by librqbit. Singleton held by the app.
 #[derive(uniffi::Object)]
-pub struct LorrentSession {
+pub struct NeoTorrentSession {
     inner: Arc<CoreSession>,
 }
 
 #[uniffi::export(async_runtime = "tokio")]
-impl LorrentSession {
+impl NeoTorrentSession {
     /// Create a session that downloads into `download_dir` and persists
     /// session state (torrent list, DHT, fastresume) into `state_dir`.
     /// Previously-added torrents resume automatically on next launch.
     #[uniffi::constructor]
-    pub async fn new(download_dir: String, state_dir: String) -> Result<Arc<Self>, LorrentError> {
+    pub async fn new(download_dir: String, state_dir: String) -> Result<Arc<Self>, NeoTorrentError> {
         let inner = CoreSession::new(download_dir.into(), state_dir.into()).await?;
         Ok(Arc::new(Self { inner: Arc::new(inner) }))
     }
 
     /// Add a magnet URI. Returns the torrent's session-local ID. librqbit
     /// handles metadata fetch and starts downloading in the background.
-    pub async fn add_magnet(&self, uri: String) -> Result<u64, LorrentError> {
+    pub async fn add_magnet(&self, uri: String) -> Result<u64, NeoTorrentError> {
         let h = self.inner.add_magnet(&uri).await?;
         Ok(h.id() as u64)
     }
 
-    pub async fn pause(&self, id: u64) -> Result<(), LorrentError> {
+    pub async fn pause(&self, id: u64) -> Result<(), NeoTorrentError> {
         self.inner.pause(id).await?;
         Ok(())
     }
 
-    pub async fn resume(&self, id: u64) -> Result<(), LorrentError> {
+    pub async fn resume(&self, id: u64) -> Result<(), NeoTorrentError> {
         self.inner.resume(id).await?;
         Ok(())
     }
 
-    pub async fn remove(&self, id: u64, delete_files: bool) -> Result<(), LorrentError> {
+    pub async fn remove(&self, id: u64, delete_files: bool) -> Result<(), NeoTorrentError> {
         self.inner.remove(id, delete_files).await?;
         Ok(())
     }
 
     /// Restrict the torrent to downloading only the given file indices.
     /// Pass all indices (0..n) to undo a selection.
-    pub async fn set_only_files(&self, id: u64, indices: Vec<u32>) -> Result<(), LorrentError> {
+    pub async fn set_only_files(&self, id: u64, indices: Vec<u32>) -> Result<(), NeoTorrentError> {
         self.inner.set_only_files(id, indices).await?;
         Ok(())
     }
 }
 
 #[uniffi::export]
-impl LorrentSession {
+impl NeoTorrentSession {
     /// Current snapshot of all managed torrents (cheap; safe to poll).
     pub fn list(&self) -> Vec<TorrentSnapshot> {
         self.inner
@@ -179,19 +179,19 @@ impl LorrentSession {
             .collect()
     }
 
-    pub fn get(&self, id: u64) -> Result<TorrentSnapshot, LorrentError> {
+    pub fn get(&self, id: u64) -> Result<TorrentSnapshot, NeoTorrentError> {
         let h = self.inner.handle(id)?;
         Ok(snapshot(&h).into())
     }
 
     /// Per-file progress for the torrent. Empty if metadata isn't resolved yet.
-    pub fn files(&self, id: u64) -> Result<Vec<TorrentFile>, LorrentError> {
+    pub fn files(&self, id: u64) -> Result<Vec<TorrentFile>, NeoTorrentError> {
         let files = self.inner.files(id)?;
         Ok(files.into_iter().map(Into::into).collect())
     }
 
     /// Filesystem path where the torrent is being written. Use for Reveal in Finder.
-    pub fn output_folder(&self, id: u64) -> Result<String, LorrentError> {
+    pub fn output_folder(&self, id: u64) -> Result<String, NeoTorrentError> {
         let p = self.inner.output_folder(id)?;
         Ok(p.to_string_lossy().into_owned())
     }

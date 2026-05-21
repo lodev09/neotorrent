@@ -8,5 +8,5 @@ pub mod tracker;
 pub mod wire;
 
 pub fn greet() -> String {
-    format!("Hello from lorrent-core v{}", env!("CARGO_PKG_VERSION"))
+    format!("Hello from neotorrent-core v{}", env!("CARGO_PKG_VERSION"))
 }

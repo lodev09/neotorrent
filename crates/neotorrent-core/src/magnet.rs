@@ -50,7 +50,7 @@ impl MagnetLink {
         })
     }
 
-    /// Trackers usable by lorrent. We're WebRTC-only, so non-WS trackers are dropped.
+    /// Trackers usable by neotorrent. We're WebRTC-only, so non-WS trackers are dropped.
     pub fn ws_trackers(&self) -> impl Iterator<Item = &str> {
         self.trackers
             .iter()

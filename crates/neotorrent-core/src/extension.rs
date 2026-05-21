@@ -43,7 +43,7 @@ pub struct ExtendedHandshake {
     /// Map of extension name → the ID *this peer* will accept for that extension.
     #[serde(default)]
     pub m: BTreeMap<String, u8>,
-    /// Client version string (e.g., "lorrent 0.1").
+    /// Client version string (e.g., "neotorrent 0.1").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub v: Option<String>,
     /// Total .torrent metadata size in bytes (advertised by peers that have it).
@@ -58,7 +58,7 @@ impl ExtendedHandshake {
         m.insert("ut_metadata".to_string(), OUR_UT_METADATA_ID);
         Self {
             m,
-            v: Some(format!("lorrent {}", env!("CARGO_PKG_VERSION"))),
+            v: Some(format!("neotorrent {}", env!("CARGO_PKG_VERSION"))),
             metadata_size: None,
         }
     }
@@ -251,7 +251,7 @@ mod tests {
         let enc = h.encode().unwrap();
         let dec = ExtendedHandshake::decode(&enc).unwrap();
         assert_eq!(dec.ut_metadata_id(), Some(OUR_UT_METADATA_ID));
-        assert!(dec.v.as_ref().unwrap().starts_with("lorrent "));
+        assert!(dec.v.as_ref().unwrap().starts_with("neotorrent "));
     }
 
     #[test]

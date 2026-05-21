@@ -28,13 +28,13 @@ impl From<anyhow::Error> for SessionError {
     }
 }
 
-pub struct LorrentSession {
+pub struct NeoTorrentSession {
     inner: Arc<Session>,
     download_dir: PathBuf,
     streaming_port: u16,
 }
 
-impl LorrentSession {
+impl NeoTorrentSession {
     /// Build a session that:
     /// - Downloads into `download_dir`.
     /// - Persists session state (torrent list, fastresume, DHT) under

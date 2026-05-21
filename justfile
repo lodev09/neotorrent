@@ -1,4 +1,4 @@
-# Lorrent task runner.
+# NeoTorrent task runner.
 # Install just: `brew install just`. List recipes: `just`.
 
 set shell := ["bash", "-cu"]
@@ -15,28 +15,28 @@ bindings:
 
 # Regenerate the Xcode project from project.yml.
 xcode:
-    cd apps/Lorrent && xcodegen generate
+    cd apps/NeoTorrent && xcodegen generate
 
 # Full macOS .app build (Rust → bindings → xcodegen → xcodebuild).
 app: bindings xcode
     xcodebuild \
-        -project apps/Lorrent/Lorrent.xcodeproj \
-        -scheme Lorrent \
+        -project apps/NeoTorrent/NeoTorrent.xcodeproj \
+        -scheme NeoTorrent \
         -configuration Debug \
         -destination 'platform=macOS,arch=arm64' \
         build
 
 # Build + launch.
 run: app
-    open ~/Library/Developer/Xcode/DerivedData/Lorrent-*/Build/Products/Debug/Lorrent.app
+    open ~/Library/Developer/Xcode/DerivedData/NeoTorrent-*/Build/Products/Debug/NeoTorrent.app
 
 # Release build of the .app.
 release:
     PROFILE=release ./scripts/build-rust.sh
-    cd apps/Lorrent && xcodegen generate
+    cd apps/NeoTorrent && xcodegen generate
     xcodebuild \
-        -project apps/Lorrent/Lorrent.xcodeproj \
-        -scheme Lorrent \
+        -project apps/NeoTorrent/NeoTorrent.xcodeproj \
+        -scheme NeoTorrent \
         -configuration Release \
         -destination 'platform=macOS,arch=arm64' \
         build
@@ -71,7 +71,7 @@ check: fmt-check lint test
 # Wipe build artifacts (cargo target, generated bindings, Xcode project, plist).
 clean:
     cargo clean
-    rm -rf apps/Lorrent/Lorrent/Generated
-    rm -rf apps/Lorrent/Lorrent.xcodeproj
-    rm -rf apps/Lorrent/Lorrent/Info.plist
-    rm -rf apps/Lorrent/build
+    rm -rf apps/NeoTorrent/NeoTorrent/Generated
+    rm -rf apps/NeoTorrent/NeoTorrent.xcodeproj
+    rm -rf apps/NeoTorrent/NeoTorrent/Info.plist
+    rm -rf apps/NeoTorrent/build

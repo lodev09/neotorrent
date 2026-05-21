@@ -1,4 +1,4 @@
-name: Lorrent
+name: NeoTorrent
 options:
   bundleIdPrefix: com.lodev09
   deploymentTarget:
@@ -16,29 +16,29 @@ settings:
     SWIFT_STRICT_CONCURRENCY: complete
 
 targets:
-  Lorrent:
+  NeoTorrent:
     type: application
     platform: macOS
     sources:
-      - path: Lorrent
+      - path: NeoTorrent
         excludes:
           - "Generated/*.a"
     info:
-      path: Lorrent/Info.plist
+      path: NeoTorrent/Info.plist
       properties:
-        CFBundleDisplayName: Lorrent
+        CFBundleDisplayName: NeoTorrent
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
         CFBundlePackageType: APPL
         LSApplicationCategoryType: public.app-category.utilities
         NSHumanReadableCopyright: "Copyright © 2026 Jovanni Lo"
-        # Register lorrent as the handler for magnet: links.
+        # Register neotorrent as the handler for magnet: links.
         CFBundleURLTypes:
-          - CFBundleURLName: com.lodev09.lorrent.magnet
+          - CFBundleURLName: com.lodev09.neotorrent.magnet
             CFBundleTypeRole: Editor
             CFBundleURLSchemes:
               - magnet
-        # Register lorrent as a handler for .torrent files.
+        # Register neotorrent as a handler for .torrent files.
         CFBundleDocumentTypes:
           - CFBundleTypeName: BitTorrent file
             CFBundleTypeRole: Viewer
@@ -59,16 +59,16 @@ targets:
                 - application/x-bittorrent
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.lodev09.lorrent
-        PRODUCT_NAME: Lorrent
+        PRODUCT_BUNDLE_IDENTIFIER: com.lodev09.neotorrent
+        PRODUCT_NAME: NeoTorrent
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "-"
-        SWIFT_INCLUDE_PATHS: "$(SRCROOT)/Lorrent/Generated"
-        LIBRARY_SEARCH_PATHS: "$(SRCROOT)/Lorrent/Generated"
-        OTHER_LDFLAGS: "-llorrent_ffi -lc++ -framework Security -framework SystemConfiguration"
+        SWIFT_INCLUDE_PATHS: "$(SRCROOT)/NeoTorrent/Generated"
+        LIBRARY_SEARCH_PATHS: "$(SRCROOT)/NeoTorrent/Generated"
+        OTHER_LDFLAGS: "-lneotorrent_ffi -lc++ -framework Security -framework SystemConfiguration"
     entitlements:
-      path: Lorrent/Lorrent.entitlements
+      path: NeoTorrent/NeoTorrent.entitlements
       properties:
         com.apple.security.app-sandbox: false
         com.apple.security.network.client: true
@@ -79,9 +79,9 @@ targets:
       preActions:
         - script: |
             cd "$SRCROOT/../.."
-            ./scripts/build-rust.sh > "${TMPDIR:-/tmp}/lorrent-build-rust.log" 2>&1 || {
-                cat "${TMPDIR:-/tmp}/lorrent-build-rust.log" >&2
+            ./scripts/build-rust.sh > "${TMPDIR:-/tmp}/neotorrent-build-rust.log" 2>&1 || {
+                cat "${TMPDIR:-/tmp}/neotorrent-build-rust.log" >&2
                 exit 1
             }
           name: Build Rust core
-          settingsTarget: Lorrent
+          settingsTarget: NeoTorrent

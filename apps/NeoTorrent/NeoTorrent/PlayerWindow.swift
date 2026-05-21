@@ -30,7 +30,7 @@ extension TorrentFile {
 
 /// Open a streaming video window for a file in a torrent.
 @MainActor
-func openPlayerWindow(session: LorrentSession, torrentID: UInt64, file: TorrentFile) {
+func openPlayerWindow(session: NeoTorrentSession, torrentID: UInt64, file: TorrentFile) {
     let urlString = session.streamUrl(id: torrentID, fileIndex: file.index)
     guard let url = URL(string: urlString) else { return }
 

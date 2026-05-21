@@ -36,7 +36,7 @@ final class Preferences {
     }
 
     var sessionDownloadDir: String = ""
-    var session: LorrentSession?
+    var session: NeoTorrentSession?
 
     static var defaultDownloadDir: String {
         (NSHomeDirectory() as NSString).appendingPathComponent("Downloads")
@@ -52,7 +52,7 @@ final class Preferences {
         self.completionSound = d.object(forKey: Self.completionSoundKey) as? Bool ?? true
     }
 
-    func attach(_ session: LorrentSession, sessionDir: String) {
+    func attach(_ session: NeoTorrentSession, sessionDir: String) {
         self.session = session
         self.sessionDownloadDir = sessionDir
         applyLimits()
@@ -101,7 +101,7 @@ struct SettingsView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
-                        Text("Restart Lorrent to apply the new folder. Existing torrents continue downloading to their original location.")
+                        Text("Restart NeoTorrent to apply the new folder. Existing torrents continue downloading to their original location.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -157,7 +157,7 @@ struct SettingsView: View {
                     HStack(spacing: 4) {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundStyle(.green)
-                        Text("Lorrent is the default")
+                        Text("NeoTorrent is the default")
                             .font(.caption)
                     }
                 } else if let h = currentHandler {

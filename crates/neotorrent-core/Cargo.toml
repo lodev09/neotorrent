@@ -1,5 +1,5 @@
 [package]
-name = "lorrent-core"
+name = "neotorrent-core"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
