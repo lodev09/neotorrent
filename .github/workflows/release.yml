@@ -20,7 +20,7 @@ permissions:
 jobs:
   release:
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -113,31 +113,7 @@ jobs:
           APP="build/Build/Products/Release/NeoTorrent.app"
           ZIP="$RUNNER_TEMP/NeoTorrent.zip"
           /usr/bin/ditto -c -k --keepParent "$APP" "$ZIP"
-
-          set +e
-          SUBMIT_OUTPUT="$(xcrun notarytool submit "$ZIP" \
-            --apple-id "$APPLE_ID" \
-            --team-id "$APPLE_TEAM_ID" \
-            --password "$APPLE_APP_PASSWORD" \
-            --wait \
-            --output-format json)"
-          SUBMIT_STATUS=$?
-          set -e
-
-          echo "$SUBMIT_OUTPUT"
-          SUBMISSION_ID="$(echo "$SUBMIT_OUTPUT" | python3 -c 'import sys, json; print(json.load(sys.stdin)["id"])')"
-          STATUS="$(echo "$SUBMIT_OUTPUT" | python3 -c 'import sys, json; print(json.load(sys.stdin)["status"])')"
-
-          if [ "$STATUS" != "Accepted" ]; then
-            echo "::group::Notarization log ($SUBMISSION_ID)"
-            xcrun notarytool log "$SUBMISSION_ID" \
-              --apple-id "$APPLE_ID" \
-              --team-id "$APPLE_TEAM_ID" \
-              --password "$APPLE_APP_PASSWORD"
-            echo "::endgroup::"
-            exit 1
-          fi
-
+          ./scripts/notarize.sh "$ZIP"
           xcrun stapler staple "$APP"
 
       - name: Package DMG
@@ -154,11 +130,7 @@ jobs:
         run: |
           DMG="dist/NeoTorrent-${{ steps.version.outputs.version }}.dmg"
           codesign --sign "Developer ID Application" --timestamp "$DMG"
-          xcrun notarytool submit "$DMG" \
-            --apple-id "$APPLE_ID" \
-            --team-id "$APPLE_TEAM_ID" \
-            --password "$APPLE_APP_PASSWORD" \
-            --wait
+          ./scripts/notarize.sh "$DMG"
           xcrun stapler staple "$DMG"
 
       - name: Upload DMG artifact
