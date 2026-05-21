@@ -6,10 +6,8 @@ import UserNotifications
 struct ContentView: View {
     @Environment(SessionHolder.self) private var sessionHolder
     @Environment(Preferences.self) private var prefs
-    @State private var magnetURI: String = ""
     @State private var addError: String?
     @State private var torrents: [TorrentSnapshot] = []
-    @State private var isAdding = false
     @State private var expandedIDs: Set<UInt64> = []
     @State private var notifiedFinishedIDs: Set<UInt64> = []
     /// Torrents we've already decided about for auto-play. Includes torrents
@@ -26,19 +24,35 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 0) {
             statusBar
             Divider()
-            addBar
-            Divider()
             if let err = sessionHolder.startupError {
                 Label(err, systemImage: "exclamationmark.octagon")
                     .foregroundStyle(.red)
                     .padding()
-            } else if torrents.isEmpty {
-                emptyState
             } else {
                 torrentList
             }
+            if let err = addError {
+                HStack(spacing: 6) {
+                    Label(err, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.red)
+                        .font(.caption)
+                    Spacer()
+                    Button {
+                        addError = nil
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(.bar)
+            }
         }
         .onDrop(of: [.fileURL], delegate: TorrentFileDropDelegate(handler: handleDroppedFiles))
+        .onPasteCommand(of: [UTType.url.identifier, UTType.plainText.identifier], perform: handlePastedItems)
         .task { await pollLoop() }
         .task { await requestNotificationAuth() }
     }
@@ -56,91 +70,75 @@ struct ContentView: View {
                     .font(.callout.monospacedDigit().weight(.medium))
             }
             Spacer()
-            if torrents.isEmpty {
-                Text("Ready")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            } else {
+            if !torrents.isEmpty {
                 Text("\(activeCount) active / \(torrents.count) total")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
+            Button(action: pickTorrentFile) {
+                Image(systemName: "plus")
+                    .font(.body.weight(.semibold))
+                    .frame(width: 22, height: 22)
+            }
+            .buttonStyle(.borderless)
+            .help("Add .torrent file")
+            .disabled(sessionHolder.session == nil)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(.bar)
     }
 
-    private var addBar: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: "link").foregroundStyle(.secondary)
-                TextField("Paste magnet URI…", text: $magnetURI)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { Task { await add() } }
-                Button {
-                    Task { await add() }
-                } label: {
-                    if isAdding {
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small)
-                            Text("Adding…")
-                        }
-                    } else {
-                        Label("Add", systemImage: "plus.circle.fill")
-                    }
-                }
-                .keyboardShortcut(.return, modifiers: [])
-                .disabled(magnetURI.isEmpty || isAdding || sessionHolder.session == nil)
-            }
-            if let err = addError {
-                Label(err, systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.red)
-                    .font(.callout)
-            }
-        }
-        .padding(16)
-    }
-
-    private var emptyState: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "tray")
-                .font(.system(size: 56))
-                .foregroundStyle(.tertiary)
-            Text("No torrents")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-            Text("Paste a magnet URI or drop a .torrent file")
-                .font(.callout)
-                .foregroundStyle(.tertiary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
     private var torrentList: some View {
-        List(torrents, id: \.id) { t in
-            TorrentRow(
-                torrent: t,
-                expanded: expandedIDs.contains(t.id),
-                onToggle: { toggleExpanded(t.id) },
-                onPause: { Task { try? await sessionHolder.session?.pause(id: t.id) } },
-                onResume: { Task { try? await sessionHolder.session?.resume(id: t.id) } },
-                onRemove: { deleteFiles in
-                    Task { try? await sessionHolder.session?.remove(id: t.id, deleteFiles: deleteFiles) }
-                },
-                onReveal: { revealInFinder(id: t.id) },
-                onPlay: { file in
-                    guard let session = sessionHolder.session else { return }
-                    openPlayerWindow(session: session, torrentID: t.id, file: file)
-                },
-                onToggleFile: { file, isSelected in
-                    Task { await toggleFile(torrentID: t.id, file: file, isSelected: isSelected) }
-                },
-                files: { sessionHolder.session.flatMap { try? $0.files(id: t.id) } ?? [] }
-            )
-            .padding(.vertical, 6)
+        List {
+            ForEach(torrents, id: \.id) { t in
+                TorrentRow(
+                    torrent: t,
+                    expanded: expandedIDs.contains(t.id),
+                    onToggle: { toggleExpanded(t.id) },
+                    onPause: { Task { try? await sessionHolder.session?.pause(id: t.id) } },
+                    onResume: { Task { try? await sessionHolder.session?.resume(id: t.id) } },
+                    onRemove: { deleteFiles in
+                        Task { try? await sessionHolder.session?.remove(id: t.id, deleteFiles: deleteFiles) }
+                    },
+                    onReveal: { revealInFinder(id: t.id) },
+                    onPlay: { file in
+                        guard let session = sessionHolder.session else { return }
+                        openPlayerWindow(session: session, torrentID: t.id, file: file)
+                    },
+                    onToggleFile: { file, isSelected in
+                        Task { await toggleFile(torrentID: t.id, file: file, isSelected: isSelected) }
+                    },
+                    files: { sessionHolder.session.flatMap { try? $0.files(id: t.id) } ?? [] }
+                )
+                .padding(.vertical, 6)
+            }
+            dropHint
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 12, leading: 12, bottom: 12, trailing: 12))
         }
         .listStyle(.inset)
+    }
+
+    private var dropHint: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "tray.and.arrow.down")
+                .font(.system(size: 22, weight: .light))
+                .foregroundStyle(.tertiary)
+            Text("Drop a .torrent file or paste a magnet link")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, torrents.isEmpty ? 56 : 20)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(
+                    Color.secondary.opacity(0.25),
+                    style: StrokeStyle(lineWidth: 1, dash: [5])
+                )
+        )
     }
 
     private func toggleExpanded(_ id: UInt64) {
@@ -153,24 +151,52 @@ struct ContentView: View {
         NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
     }
 
-    private func add() async {
+    private func pickTorrentFile() {
         guard let session = sessionHolder.session else { return }
-        let uri = magnetURI
-        isAdding = true
+        let panel = NSOpenPanel()
+        if let type = UTType(filenameExtension: "torrent") {
+            panel.allowedContentTypes = [type]
+        }
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.message = "Choose .torrent file(s) to add"
+        guard panel.runModal() == .OK else { return }
+        let urls = panel.urls
         addError = nil
-        defer { isAdding = false }
-        do {
-            _ = try await session.addMagnet(uri: uri)
-            magnetURI = ""
+        Task {
+            for url in urls {
+                do { _ = try await session.addMagnet(uri: url.path) }
+                catch { addError = error.localizedDescription }
+            }
             await refresh()
-        } catch {
-            addError = error.localizedDescription
+        }
+    }
+
+    private func handlePastedItems(_ providers: [NSItemProvider]) {
+        for p in providers {
+            _ = p.loadObject(ofClass: NSString.self) { obj, _ in
+                guard let raw = obj as? String else { return }
+                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return }
+                Task { @MainActor in
+                    guard let session = sessionHolder.session else { return }
+                    addError = nil
+                    do {
+                        _ = try await session.addMagnet(uri: trimmed)
+                        await refresh()
+                    } catch {
+                        addError = error.localizedDescription
+                    }
+                }
+            }
         }
     }
 
     private func handleDroppedFiles(_ urls: [URL]) {
         Task {
             guard let session = sessionHolder.session else { return }
+            addError = nil
             for url in urls where url.pathExtension.lowercased() == "torrent" {
                 let uri = url.isFileURL ? url.path : url.absoluteString
                 do { _ = try await session.addMagnet(uri: uri) } catch {
@@ -448,18 +474,25 @@ struct TorrentFileDropDelegate: DropDelegate {
 
     func performDrop(info: DropInfo) -> Bool {
         let providers = info.itemProviders(for: [.fileURL])
-        var collected: [URL] = []
+        let box = URLBox()
         let group = DispatchGroup()
         for p in providers {
             group.enter()
             _ = p.loadObject(ofClass: URL.self) { url, _ in
-                if let u = url { collected.append(u) }
+                if let u = url { box.append(u) }
                 group.leave()
             }
         }
-        group.notify(queue: .main) { handler(collected) }
+        group.notify(queue: .main) { handler(box.snapshot()) }
         return true
     }
+}
+
+private final class URLBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var urls: [URL] = []
+    func append(_ u: URL) { lock.lock(); urls.append(u); lock.unlock() }
+    func snapshot() -> [URL] { lock.lock(); defer { lock.unlock() }; return urls }
 }
 
 private func formatBytes(_ b: UInt64) -> String {

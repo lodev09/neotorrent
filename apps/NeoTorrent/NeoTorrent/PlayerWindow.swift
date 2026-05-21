@@ -1,5 +1,5 @@
-import SwiftUI
-import AVKit
+@preconcurrency import SwiftUI
+@preconcurrency import AVKit
 
 struct PlayerWindow: View {
     let url: URL
@@ -54,13 +54,20 @@ func openPlayerWindow(session: NeoTorrentSession, torrentID: UInt64, file: Torre
     NSApp.activate(ignoringOtherApps: true)
 
     // Hold a strong reference until the window closes.
-    var observer: NSObjectProtocol?
-    observer = NotificationCenter.default.addObserver(
+    let observerBox = ObserverBox()
+    observerBox.token = NotificationCenter.default.addObserver(
         forName: NSWindow.willCloseNotification,
         object: window,
         queue: .main
-    ) { _ in
+    ) { [observerBox] _ in
         player.pause()
-        if let obs = observer { NotificationCenter.default.removeObserver(obs) }
+        if let token = observerBox.token {
+            NotificationCenter.default.removeObserver(token)
+            observerBox.token = nil
+        }
     }
+}
+
+private final class ObserverBox: @unchecked Sendable {
+    var token: NSObjectProtocol?
 }
