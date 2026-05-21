@@ -11,11 +11,11 @@ struct NeoTorrentApp: App {
     @State private var prefs = Preferences()
 
     var body: some Scene {
-        WindowGroup {
+        Window("NeoTorrent", id: "main") {
             ContentView()
                 .environment(sessionHolder)
                 .environment(prefs)
-                .frame(minWidth: 720, minHeight: 480)
+                .frame(minWidth: 560, minHeight: 200)
                 .task { await start() }
                 .onOpenURL { url in
                     sessionHolder.handleOpenURL(url)
@@ -23,6 +23,7 @@ struct NeoTorrentApp: App {
         }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified)
+        .windowResizability(.contentSize)
 
         Settings {
             SettingsView()
@@ -38,12 +39,18 @@ struct NeoTorrentApp: App {
     }
 }
 
+struct PendingTorrent: Identifiable {
+    let id = UUID()
+    var name: String
+}
+
 @MainActor
 @Observable
 final class SessionHolder {
     var session: NeoTorrentSession?
     var startupError: String?
-    private var pending: [String] = []
+    var pendingAdds: [PendingTorrent] = []
+    private var preStartQueue: [String] = []
 
     func start(downloadDir: String) async {
         guard session == nil else { return }
@@ -54,14 +61,26 @@ final class SessionHolder {
         do {
             let s = try await NeoTorrentSession(downloadDir: downloadDir, stateDir: stateDir)
             session = s
-            let queued = pending
-            pending.removeAll()
+            let queued = preStartQueue
+            preStartQueue.removeAll()
             for uri in queued {
-                _ = try? await s.addMagnet(uri: uri)
+                _ = try? await add(uri: uri)
             }
         } catch {
             startupError = "Failed to start session: \(error.localizedDescription)"
         }
+    }
+
+    @discardableResult
+    func add(uri: String) async throws -> UInt64? {
+        guard let session else {
+            preStartQueue.append(uri)
+            return nil
+        }
+        let entry = PendingTorrent(name: displayName(for: uri))
+        pendingAdds.append(entry)
+        defer { pendingAdds.removeAll { $0.id == entry.id } }
+        return try await session.addMagnet(uri: uri)
     }
 
     func handleOpenURL(_ url: URL) {
@@ -73,10 +92,18 @@ final class SessionHolder {
         } else {
             return
         }
-        if let session {
-            Task { _ = try? await session.addMagnet(uri: uri) }
-        } else {
-            pending.append(uri)
+        Task { _ = try? await add(uri: uri) }
+    }
+
+    private func displayName(for uri: String) -> String {
+        if uri.hasPrefix("magnet:") {
+            if let parsed = try? parseMagnet(uri: uri) {
+                if let n = parsed.displayName, !n.isEmpty { return n }
+                return "Magnet (\(parsed.infoHash.prefix(8))…)"
+            }
+            return "Magnet"
         }
+        let url = URL(fileURLWithPath: uri)
+        return url.deletingPathExtension().lastPathComponent
     }
 }

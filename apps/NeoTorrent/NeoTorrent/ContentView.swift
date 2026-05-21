@@ -10,20 +10,11 @@ struct ContentView: View {
     @State private var torrents: [TorrentSnapshot] = []
     @State private var expandedIDs: Set<UInt64> = []
     @State private var notifiedFinishedIDs: Set<UInt64> = []
-    /// Torrents we've already decided about for auto-play. Includes torrents
-    /// loaded from persistence at launch (we don't auto-play those).
-    @State private var consideredAutoPlayIDs: Set<UInt64> = []
-    /// Set after the first refresh so we don't auto-play resumed torrents.
-    @State private var didInitializeAutoPlayBaseline = false
 
-    private var totalDownBps: UInt64 { torrents.reduce(0) { $0 + $1.downloadBps } }
-    private var totalUpBps: UInt64 { torrents.reduce(0) { $0 + $1.uploadBps } }
     private var activeCount: Int { torrents.filter { !$0.isFinished }.count }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            statusBar
-            Divider()
             if let err = sessionHolder.startupError {
                 Label(err, systemImage: "exclamationmark.octagon")
                     .foregroundStyle(.red)
@@ -51,46 +42,28 @@ struct ContentView: View {
                 .background(.bar)
             }
         }
+        .navigationTitle("NeoTorrent")
+        .navigationSubtitle(torrents.isEmpty ? "" : "\(activeCount) active / \(torrents.count) total")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: pickTorrentFile) {
+                    Label("Add", systemImage: "plus")
+                }
+                .help("Add .torrent file")
+                .disabled(sessionHolder.session == nil)
+            }
+        }
         .onDrop(of: [.fileURL], delegate: TorrentFileDropDelegate(handler: handleDroppedFiles))
         .onPasteCommand(of: [UTType.url.identifier, UTType.plainText.identifier], perform: handlePastedItems)
         .task { await pollLoop() }
         .task { await requestNotificationAuth() }
     }
 
-    private var statusBar: some View {
-        HStack(spacing: 16) {
-            HStack(spacing: 4) {
-                Image(systemName: "arrow.down").foregroundStyle(.blue)
-                Text(formatRate(totalDownBps))
-                    .font(.callout.monospacedDigit().weight(.medium))
-            }
-            HStack(spacing: 4) {
-                Image(systemName: "arrow.up").foregroundStyle(.orange)
-                Text(formatRate(totalUpBps))
-                    .font(.callout.monospacedDigit().weight(.medium))
-            }
-            Spacer()
-            if !torrents.isEmpty {
-                Text("\(activeCount) active / \(torrents.count) total")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-            Button(action: pickTorrentFile) {
-                Image(systemName: "plus")
-                    .font(.body.weight(.semibold))
-                    .frame(width: 22, height: 22)
-            }
-            .buttonStyle(.borderless)
-            .help("Add .torrent file")
-            .disabled(sessionHolder.session == nil)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(.bar)
-    }
-
     private var torrentList: some View {
-        List {
+        VStack(spacing: 10) {
+            ForEach(sessionHolder.pendingAdds) { p in
+                PendingRow(name: p.name)
+            }
             ForEach(torrents, id: \.id) { t in
                 TorrentRow(
                     torrent: t,
@@ -102,23 +75,15 @@ struct ContentView: View {
                         Task { try? await sessionHolder.session?.remove(id: t.id, deleteFiles: deleteFiles) }
                     },
                     onReveal: { revealInFinder(id: t.id) },
-                    onPlay: { file in
-                        guard let session = sessionHolder.session else { return }
-                        openPlayerWindow(session: session, torrentID: t.id, file: file)
-                    },
                     onToggleFile: { file, isSelected in
                         Task { await toggleFile(torrentID: t.id, file: file, isSelected: isSelected) }
                     },
                     files: { sessionHolder.session.flatMap { try? $0.files(id: t.id) } ?? [] }
                 )
-                .padding(.vertical, 6)
             }
             dropHint
-                .listRowSeparator(.hidden)
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets(top: 12, leading: 12, bottom: 12, trailing: 12))
         }
-        .listStyle(.inset)
+        .padding(12)
     }
 
     private var dropHint: some View {
@@ -152,7 +117,7 @@ struct ContentView: View {
     }
 
     private func pickTorrentFile() {
-        guard let session = sessionHolder.session else { return }
+        guard sessionHolder.session != nil else { return }
         let panel = NSOpenPanel()
         if let type = UTType(filenameExtension: "torrent") {
             panel.allowedContentTypes = [type]
@@ -166,7 +131,7 @@ struct ContentView: View {
         addError = nil
         Task {
             for url in urls {
-                do { _ = try await session.addMagnet(uri: url.path) }
+                do { _ = try await sessionHolder.add(uri: url.path) }
                 catch { addError = error.localizedDescription }
             }
             await refresh()
@@ -180,10 +145,9 @@ struct ContentView: View {
                 let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { return }
                 Task { @MainActor in
-                    guard let session = sessionHolder.session else { return }
                     addError = nil
                     do {
-                        _ = try await session.addMagnet(uri: trimmed)
+                        _ = try await sessionHolder.add(uri: trimmed)
                         await refresh()
                     } catch {
                         addError = error.localizedDescription
@@ -195,11 +159,10 @@ struct ContentView: View {
 
     private func handleDroppedFiles(_ urls: [URL]) {
         Task {
-            guard let session = sessionHolder.session else { return }
             addError = nil
             for url in urls where url.pathExtension.lowercased() == "torrent" {
                 let uri = url.isFileURL ? url.path : url.absoluteString
-                do { _ = try await session.addMagnet(uri: uri) } catch {
+                do { _ = try await sessionHolder.add(uri: uri) } catch {
                     addError = error.localizedDescription
                 }
             }
@@ -211,15 +174,7 @@ struct ContentView: View {
         guard let session = sessionHolder.session else { return }
         let updated = session.list()
 
-        // First refresh: snapshot the existing IDs so resumed torrents don't
-        // trigger auto-play. They've been "considered" already.
-        if !didInitializeAutoPlayBaseline {
-            consideredAutoPlayIDs = Set(updated.map { $0.id })
-            didInitializeAutoPlayBaseline = true
-        }
-
         for t in updated {
-            // Newly-finished → completion notification + sound.
             if t.isFinished && !notifiedFinishedIDs.contains(t.id) {
                 if let prev = torrents.first(where: { $0.id == t.id }), !prev.isFinished {
                     postCompletionNotification(for: t)
@@ -228,19 +183,6 @@ struct ContentView: View {
                     }
                 }
                 notifiedFinishedIDs.insert(t.id)
-            }
-
-            // Auto-play newly-added torrents once metadata resolves.
-            if prefs.autoPlay
-                && !consideredAutoPlayIDs.contains(t.id)
-                && !t.isFinished
-            {
-                if let files = try? session.files(id: t.id), !files.isEmpty {
-                    if let playable = files.first(where: { $0.isPlayable && $0.selected }) {
-                        openPlayerWindow(session: session, torrentID: t.id, file: playable)
-                    }
-                    consideredAutoPlayIDs.insert(t.id)
-                }
             }
         }
 
@@ -295,38 +237,36 @@ struct TorrentRow: View {
     let onResume: () -> Void
     let onRemove: (Bool) -> Void
     let onReveal: () -> Void
-    let onPlay: (TorrentFile) -> Void
     let onToggleFile: (TorrentFile, Bool) -> Void
     let files: () -> [TorrentFile]
 
     @State private var confirmingRemove = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
                 Button(action: onToggle) {
                     Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.caption.weight(.semibold))
                         .frame(width: 14)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                Image(systemName: iconName).foregroundStyle(iconColor)
+                .foregroundStyle(.tertiary)
+                Image(systemName: iconName)
+                    .font(.title3)
+                    .foregroundStyle(stateColor)
                 Text(torrent.name ?? "fetching metadata…")
-                    .font(.body.weight(.semibold))
+                    .font(.headline)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer()
-                Text(torrent.state)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(.gray.opacity(0.15), in: Capsule())
+                statePill
                 controls
             }
             ProgressView(value: torrent.progress)
                 .progressViewStyle(.linear)
-            HStack(spacing: 16) {
+                .tint(stateColor)
+            HStack(spacing: 18) {
                 stat("Progress", String(format: "%.1f%%", torrent.progress * 100))
                 stat("Down", formatRate(torrent.downloadBps))
                 stat("Up", formatRate(torrent.uploadBps))
@@ -337,10 +277,16 @@ struct TorrentRow: View {
                     .foregroundStyle(.secondary)
             }
             if expanded {
-                FileList(files: files(), onPlay: onPlay, onToggle: onToggleFile)
-                    .padding(.top, 4)
+                Divider()
+                FileList(files: files(), onToggle: onToggleFile)
             }
         }
+        .padding(14)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.07), lineWidth: 0.5)
+        )
         .confirmationDialog(
             "Remove \(torrent.name ?? "torrent")?",
             isPresented: $confirmingRemove,
@@ -350,6 +296,16 @@ struct TorrentRow: View {
             Button("Remove + delete files", role: .destructive) { onRemove(true) }
             Button("Cancel", role: .cancel) { }
         }
+    }
+
+    private var statePill: some View {
+        Text(torrent.state)
+            .font(.caption2.weight(.semibold))
+            .textCase(.uppercase)
+            .foregroundStyle(stateColor)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(stateColor.opacity(0.15), in: Capsule())
     }
 
     @ViewBuilder
@@ -373,13 +329,13 @@ struct TorrentRow: View {
 
     private var iconName: String {
         if torrent.isFinished { return "checkmark.circle.fill" }
-        if torrent.state.lowercased() == "paused" { return "pause.circle" }
-        return "arrow.down.circle"
+        if torrent.state.lowercased() == "paused" { return "pause.circle.fill" }
+        return "arrow.down.circle.fill"
     }
 
-    private var iconColor: Color {
+    private var stateColor: Color {
         if torrent.isFinished { return .green }
-        if torrent.state.lowercased() == "paused" { return .secondary }
+        if torrent.state.lowercased() == "paused" { return .gray }
         return .blue
     }
 
@@ -395,9 +351,33 @@ struct TorrentRow: View {
     }
 }
 
+struct PendingRow: View {
+    let name: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+            Text(name)
+                .font(.headline)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Text("Adding…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(14)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.07), lineWidth: 0.5)
+        )
+    }
+}
+
 struct FileList: View {
     let files: [TorrentFile]
-    let onPlay: (TorrentFile) -> Void
     let onToggle: (TorrentFile, Bool) -> Void
 
     var body: some View {
@@ -427,16 +407,6 @@ struct FileList: View {
                             .strikethrough(!f.selected)
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        if f.isPlayable && f.selected {
-                            Button {
-                                onPlay(f)
-                            } label: {
-                                Image(systemName: "play.circle.fill")
-                                    .foregroundStyle(.tint)
-                            }
-                            .buttonStyle(.plain)
-                            .help("Stream this file")
-                        }
                         Spacer()
                         Text(progressText(f))
                             .font(.caption.monospacedDigit())

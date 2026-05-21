@@ -7,7 +7,6 @@ final class Preferences {
     static let downloadDirKey = "preferences.downloadDir"
     static let downloadKBpsKey = "preferences.downloadKBps"
     static let uploadKBpsKey = "preferences.uploadKBps"
-    static let autoPlayKey = "preferences.autoPlay"
     static let completionSoundKey = "preferences.completionSound"
 
     var downloadDir: String {
@@ -25,10 +24,6 @@ final class Preferences {
             UserDefaults.standard.set(uploadKBps, forKey: Self.uploadKBpsKey)
             applyLimits()
         }
-    }
-    /// Auto-open the player when a newly-added torrent has a playable file.
-    var autoPlay: Bool {
-        didSet { UserDefaults.standard.set(autoPlay, forKey: Self.autoPlayKey) }
     }
     /// Play a chime when a torrent finishes.
     var completionSound: Bool {
@@ -48,7 +43,6 @@ final class Preferences {
         self.downloadKBps = d.integer(forKey: Self.downloadKBpsKey)
         self.uploadKBps = d.integer(forKey: Self.uploadKBpsKey)
         // For bools, default to true if never set.
-        self.autoPlay = d.object(forKey: Self.autoPlayKey) as? Bool ?? true
         self.completionSound = d.object(forKey: Self.completionSoundKey) as? Bool ?? true
     }
 
@@ -117,7 +111,6 @@ struct SettingsView: View {
             }
 
             Section("Behavior") {
-                Toggle("Auto-play new media torrents", isOn: $bindable.autoPlay)
                 Toggle("Play sound when downloads finish", isOn: $bindable.completionSound)
             }
 
