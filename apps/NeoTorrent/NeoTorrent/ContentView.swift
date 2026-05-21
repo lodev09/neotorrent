@@ -439,8 +439,7 @@ struct TorrentRow: View {
             if let poster {
                 Image(nsImage: poster)
                     .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .scaledToFill()
                     .overlay(
                         LinearGradient(
                             colors: [.black.opacity(0.7), .black.opacity(0.45), .black.opacity(0.65)],
@@ -448,16 +447,11 @@ struct TorrentRow: View {
                             endPoint: .bottom
                         )
                     )
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             } else {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(.thickMaterial)
+                Rectangle().fill(.thickMaterial)
             }
         }
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
-        )
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .shadow(color: Color.black.opacity(0.08), radius: 3, y: 1)
         .onHover { isHovered = $0 }
         .confirmationDialog(
