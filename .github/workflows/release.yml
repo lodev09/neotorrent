@@ -18,9 +18,13 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  build:
+    name: Build + sign
     runs-on: macos-15
-    timeout-minutes: 120
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.version.outputs.publish }}
     steps:
       - uses: actions/checkout@v4
 
@@ -39,7 +43,7 @@ jobs:
           echo "Version: $VERSION (publish=$PUBLISH)"
 
       - name: Install build tools
-        run: brew install xcodegen create-dmg just
+        run: brew install xcodegen just
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -59,20 +63,7 @@ jobs:
           CERT_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12 }}
           CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          CERT_PATH="$RUNNER_TEMP/cert.p12"
-          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
-
-          echo -n "$CERT_P12_BASE64" | base64 --decode -o "$CERT_PATH"
-
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security import "$CERT_PATH" -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychain -d user | xargs)
-
-          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+        run: ./scripts/ci-import-cert.sh
 
       - name: Build Rust core + bindings
         run: PROFILE=release ./scripts/build-rust.sh
@@ -104,22 +95,64 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$APP"
           codesign -dvv "$APP"
 
+      - name: Archive signed app
+        run: |
+          APP="build/Build/Products/Release/NeoTorrent.app"
+          /usr/bin/ditto -c -k --keepParent "$APP" "NeoTorrent-signed.zip"
+
+      - name: Upload signed app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: neotorrent-signed-app
+          path: NeoTorrent-signed.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Cleanup keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
+
+  notarize:
+    name: Notarize + package + release
+    needs: build
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install packaging tools
+        run: brew install create-dmg
+
+      - name: Download signed app artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: neotorrent-signed-app
+
+      - name: Extract signed app
+        run: |
+          mkdir -p build/Build/Products/Release
+          /usr/bin/ditto -x -k NeoTorrent-signed.zip build/Build/Products/Release
+
       - name: Notarize app
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
-          APP="build/Build/Products/Release/NeoTorrent.app"
-          ZIP="$RUNNER_TEMP/NeoTorrent.zip"
-          /usr/bin/ditto -c -k --keepParent "$APP" "$ZIP"
-          ./scripts/notarize.sh "$ZIP"
-          xcrun stapler staple "$APP"
+          ./scripts/notarize.sh NeoTorrent-signed.zip
+          xcrun stapler staple "build/Build/Products/Release/NeoTorrent.app"
+
+      - name: Import signing certificate (for DMG)
+        env:
+          CERT_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: ./scripts/ci-import-cert.sh
 
       - name: Package DMG
         run: |
           APP_PATH="$PWD/build/Build/Products/Release/NeoTorrent.app" \
-            VERSION="${{ steps.version.outputs.version }}" \
+            VERSION="${{ needs.build.outputs.version }}" \
             ./scripts/package-dmg.sh
 
       - name: Sign + notarize DMG
@@ -128,7 +161,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
-          DMG="dist/NeoTorrent-${{ steps.version.outputs.version }}.dmg"
+          DMG="dist/NeoTorrent-${{ needs.build.outputs.version }}.dmg"
           codesign --sign "Developer ID Application" --timestamp "$DMG"
           ./scripts/notarize.sh "$DMG"
           xcrun stapler staple "$DMG"
@@ -136,16 +169,16 @@ jobs:
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NeoTorrent-${{ steps.version.outputs.version }}-dmg
-          path: dist/NeoTorrent-${{ steps.version.outputs.version }}.dmg
+          name: NeoTorrent-${{ needs.build.outputs.version }}-dmg
+          path: dist/NeoTorrent-${{ needs.build.outputs.version }}.dmg
           if-no-files-found: error
 
       - name: Create GitHub release
-        if: steps.version.outputs.publish == 'true'
+        if: needs.build.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
+          VERSION="${{ needs.build.outputs.version }}"
           TAG="v$VERSION"
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" \
@@ -158,5 +191,4 @@ jobs:
 
       - name: Cleanup keychain
         if: always()
-        run: |
-          security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
+        run: security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
