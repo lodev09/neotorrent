@@ -8,16 +8,15 @@ everything.
 ## Features
 
 - Add torrents via magnet URI, `.torrent` file, drag-and-drop, or paste
+- Card-based torrent list with inline file picker and progress
+- Duplicate magnet detection (no accidental re-adds)
 - Pause / resume / remove (with optional file deletion)
 - Per-file selection (skip files you don't want)
-- Built-in streaming player — watch video while it downloads (AVPlayer + local
-  HTTP range server)
 - Resumes torrents on app launch
 - Session-wide bandwidth limits (live-updatable)
 - Customizable download folder
 - macOS default handler for `magnet:` links and `.torrent` files
-- Completion notifications + chime
-- Auto-play newly-added media torrents
+- Completion notifications + action/chime sound effects (toggleable)
 
 ## Architecture
 
@@ -94,3 +93,16 @@ just test-net   # network smoke tests (Sintel fetch over WebRTC)
 - [librqbit](https://github.com/ikatson/rqbit) — pure-Rust BitTorrent client
 - [webrtc-rs](https://github.com/webrtc-rs/webrtc) — pure-Rust WebRTC
 - [UniFFI](https://github.com/mozilla/uniffi-rs) — Rust ↔ Swift bridge
+
+## Inspiration
+
+Heavily inspired by [WebTorrent Desktop](https://github.com/webtorrent/webtorrent-desktop)
+— same drag-a-magnet-and-go UX, but rebuilt as a native macOS app. Goals that
+drove the rewrite:
+
+- Drop Electron/Node — ship a single Apple-Silicon binary instead of a 200 MB
+  Chromium bundle
+- Use the modern Rust BitTorrent stack (`librqbit`) for the wire protocol
+- Keep WebTorrent-flavored WebRTC peer support on the roadmap (the
+  `neotorrent-core` crates already speak it end-to-end against real WebTorrent
+  peers)
