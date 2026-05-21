@@ -94,6 +94,7 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Developer ID Application" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
             OTHER_CODE_SIGN_FLAGS="--timestamp --options runtime" \
             clean build
 
@@ -113,11 +114,29 @@ jobs:
           ZIP="$RUNNER_TEMP/NeoTorrent.zip"
           /usr/bin/ditto -c -k --keepParent "$APP" "$ZIP"
 
-          xcrun notarytool submit "$ZIP" \
+          set +e
+          SUBMIT_OUTPUT="$(xcrun notarytool submit "$ZIP" \
             --apple-id "$APPLE_ID" \
             --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_APP_PASSWORD" \
-            --wait
+            --wait \
+            --output-format json)"
+          SUBMIT_STATUS=$?
+          set -e
+
+          echo "$SUBMIT_OUTPUT"
+          SUBMISSION_ID="$(echo "$SUBMIT_OUTPUT" | python3 -c 'import sys, json; print(json.load(sys.stdin)["id"])')"
+          STATUS="$(echo "$SUBMIT_OUTPUT" | python3 -c 'import sys, json; print(json.load(sys.stdin)["status"])')"
+
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "::group::Notarization log ($SUBMISSION_ID)"
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --apple-id "$APPLE_ID" \
+              --team-id "$APPLE_TEAM_ID" \
+              --password "$APPLE_APP_PASSWORD"
+            echo "::endgroup::"
+            exit 1
+          fi
 
           xcrun stapler staple "$APP"
 
