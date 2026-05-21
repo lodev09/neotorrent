@@ -1,17 +1,20 @@
 import SwiftUI
 import AppKit
+import AVFoundation
 import UniformTypeIdentifiers
 import UserNotifications
 
 struct ContentView: View {
     @Environment(SessionHolder.self) private var sessionHolder
     @Environment(Preferences.self) private var prefs
+    @Environment(PosterStore.self) private var posters
     @State private var torrents: [TorrentSnapshot] = []
     @State private var expandedIDs: Set<UInt64> = []
     @State private var notifiedFinishedIDs: Set<UInt64> = []
     @State private var removingIDs: Set<UInt64> = []
     @State private var playableURLs: [UInt64: URL] = [:]
     @State private var didInitialLoad = false
+    @FocusState private var paneFocused: Bool
 
 
     var body: some View {
@@ -63,8 +66,15 @@ struct ContentView: View {
                 .disabled(sessionHolder.session == nil)
             }
         }
+        .focusable()
+        .focusEffectDisabled()
+        .focused($paneFocused)
+        .task { paneFocused = true }
         .onDrop(of: [.fileURL], delegate: TorrentFileDropDelegate(handler: handleDroppedFiles))
         .onPasteCommand(of: [UTType.url.identifier, UTType.plainText.identifier], perform: handlePastedItems)
+        .onReceive(NotificationCenter.default.publisher(for: .neotorrentPasteFromClipboard)) { _ in
+            pasteFromClipboard()
+        }
         .task { await pollLoop() }
         .task { await requestNotificationAuth() }
         .task(id: sessionHolder.addError) {
@@ -106,7 +116,8 @@ struct ContentView: View {
                         },
                         files: { sessionHolder.session.flatMap { try? $0.files(id: t.id) } ?? [] },
                         playURL: playableURLs[t.id],
-                        onPlay: { url in playInVLC(url: url) }
+                        onPlay: { url in playInVLC(url: url) },
+                        poster: posters.image(for: t.infoHash)
                     )
                 }
                 ForEach(sessionHolder.pendingAdds) { p in
@@ -162,8 +173,19 @@ struct ContentView: View {
             if let url = URL(string: "\(base)/\(encoded)") {
                 next[t.id] = url
             }
+            if media.downloaded > 0, let local = localFileURL(torrentID: t.id, file: media, session: session) {
+                posters.ensure(infoHash: t.infoHash, fileURL: local)
+            }
         }
         if next != playableURLs { playableURLs = next }
+    }
+
+    private func localFileURL(torrentID: UInt64, file: TorrentFile, session: NeoTorrentSession) -> URL? {
+        guard let folder = try? session.outputFolder(id: torrentID) else { return nil }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: folder, isDirectory: &isDir) else { return nil }
+        let url = URL(fileURLWithPath: folder)
+        return isDir.boolValue ? url.appendingPathComponent(file.path) : url
     }
 
     private func largestPlayableMedia(in files: [TorrentFile]) -> TorrentFile? {
@@ -210,13 +232,17 @@ struct ContentView: View {
         Task {
             for url in urls {
                 do { _ = try await sessionHolder.add(uri: url.path) }
-                catch { sessionHolder.addError = (error as? AddTorrentError)?.errorDescription ?? error.localizedDescription }
+                catch { sessionHolder.addError = friendlyAddError(error) }
             }
             await refresh()
         }
     }
 
     private func handlePastedItems(_ providers: [NSItemProvider]) {
+        pasteFromClipboard()
+    }
+
+    private func pasteFromClipboard() {
         let pb = NSPasteboard.general
         var candidates: [String] = []
         if let urls = pb.readObjects(forClasses: [NSURL.self]) as? [URL] {
@@ -234,7 +260,7 @@ struct ContentView: View {
                 do {
                     _ = try await sessionHolder.add(uri: trimmed)
                 } catch {
-                    sessionHolder.addError = (error as? AddTorrentError)?.errorDescription ?? error.localizedDescription
+                    sessionHolder.addError = friendlyAddError(error)
                 }
             }
             await refresh()
@@ -247,7 +273,7 @@ struct ContentView: View {
             for url in urls where url.pathExtension.lowercased() == "torrent" {
                 let uri = url.isFileURL ? url.path : url.absoluteString
                 do { _ = try await sessionHolder.add(uri: uri) } catch {
-                    sessionHolder.addError = (error as? AddTorrentError)?.errorDescription ?? error.localizedDescription
+                    sessionHolder.addError = friendlyAddError(error)
                 }
             }
             await refresh()
@@ -339,6 +365,7 @@ struct TorrentRow: View {
     let files: () -> [TorrentFile]
     let playURL: URL?
     let onPlay: (URL) -> Void
+    let poster: NSImage?
 
     @State private var confirmingRemove = false
     @State private var isHovered = false
@@ -407,7 +434,26 @@ struct TorrentRow: View {
                     .padding(.bottom, 14)
             }
         }
-        .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .foregroundStyle(poster != nil ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+        .background {
+            if let poster {
+                Image(nsImage: poster)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .overlay(
+                        LinearGradient(
+                            colors: [.black.opacity(0.7), .black.opacity(0.45), .black.opacity(0.65)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            } else {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(.thickMaterial)
+            }
+        }
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
