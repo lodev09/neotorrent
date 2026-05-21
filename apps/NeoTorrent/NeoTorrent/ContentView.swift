@@ -75,6 +75,9 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .neotorrentPasteFromClipboard)) { _ in
             pasteFromClipboard()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .neotorrentOpenTorrentFile)) { _ in
+            pickTorrentFile()
+        }
         .task { await pollLoop() }
         .task { await requestNotificationAuth() }
         .task(id: sessionHolder.addError) {
@@ -153,7 +156,9 @@ struct ContentView: View {
     }
 
     private func toggleExpanded(_ id: UInt64) {
-        if expandedIDs.contains(id) { expandedIDs.remove(id) } else { expandedIDs.insert(id) }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            if expandedIDs.contains(id) { expandedIDs.remove(id) } else { expandedIDs.insert(id) }
+        }
     }
 
     private func revealInFinder(id: UInt64) {
@@ -389,6 +394,7 @@ struct TorrentRow: View {
                     controls
                         .opacity(isHovered ? 1 : 0)
                         .allowsHitTesting(isHovered)
+                        .animation(.easeOut(duration: 0.08), value: isHovered)
                 }
                 .frame(height: 24)
                 HStack(spacing: 12) {
@@ -414,9 +420,12 @@ struct TorrentRow: View {
                             .foregroundStyle(.secondary)
                         Spacer()
                     } else {
-                        stat("Down", formatRate(torrent.downloadBps))
-                        stat("Up", formatRate(torrent.uploadBps))
-                        stat("Peers", "\(torrent.peersLive)/\(torrent.peersSeen)")
+                        stat("arrow.down", formatRate(torrent.downloadBps))
+                        stat("arrow.up", formatRate(torrent.uploadBps))
+                        stat("person.2.fill", "\(torrent.peersLive)/\(torrent.peersSeen)")
+                        if !torrent.isFinished, torrent.downloadBps > 0, torrent.totalBytes > torrent.downloadedBytes {
+                            stat("clock", formatETA(remaining: torrent.totalBytes - torrent.downloadedBytes, bps: torrent.downloadBps))
+                        }
                         Spacer()
                         Text("\(formatBytes(torrent.downloadedBytes)) / \(formatBytes(torrent.totalBytes))")
                             .font(.callout.monospacedDigit())
@@ -429,10 +438,23 @@ struct TorrentRow: View {
             .contentShape(Rectangle())
             .onTapGesture { onToggle() }
             if expanded {
-                FileList(files: files(), onToggle: onToggleFile)
+                FileList(files: files(), onToggle: onToggleFile, onCollapse: onToggle)
                     .padding(.horizontal, 14)
                     .padding(.bottom, 14)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
+        }
+        .overlay(alignment: .bottom) {
+            Capsule()
+                .fill(.secondary)
+                .frame(width: 32, height: 4)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+                .onTapGesture { onToggle() }
+                .opacity(isHovered ? 0.6 : 0)
+                .allowsHitTesting(isHovered)
+                .animation(.easeInOut(duration: 0.15), value: isHovered)
         }
         .foregroundStyle(poster != nil ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
         .background {
@@ -508,9 +530,9 @@ struct TorrentRow: View {
         return .blue
     }
 
-    private func stat(_ label: String, _ value: String) -> some View {
+    private func stat(_ icon: String, _ value: String) -> some View {
         HStack(spacing: 4) {
-            Text(label)
+            Image(systemName: icon)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.tertiary)
             Text(value)
@@ -542,6 +564,7 @@ struct PendingRow: View {
                 .help("Cancel add")
                 .opacity(isHovered ? 1 : 0)
                 .allowsHitTesting(isHovered)
+                .animation(.easeOut(duration: 0.08), value: isHovered)
             }
             .frame(height: 24)
             HStack(spacing: 6) {
@@ -583,6 +606,7 @@ extension View {
 struct FileList: View {
     let files: [TorrentFile]
     let onToggle: (TorrentFile, Bool) -> Void
+    let onCollapse: () -> Void
 
     // Optimistic overrides — flip instantly on click; cleared once the
     // backend's reported `selected` catches up (next poll tick).
@@ -621,18 +645,20 @@ struct FileList: View {
                             .strikethrough(!isOn)
                             .lineLimit(1)
                             .truncationMode(.middle)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                guard showCheckbox else { return }
+                                let newValue = !isOn
+                                pending[f.index] = newValue
+                                onToggle(f, newValue)
+                            }
                         Spacer()
                         Text(progressText(f, selected: isOn))
                             .font(.callout.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
                     .contentShape(Rectangle())
-                    .onTapGesture {
-                        guard showCheckbox else { return }
-                        let newValue = !isOn
-                        pending[f.index] = newValue
-                        onToggle(f, newValue)
-                    }
+                    .onTapGesture { onCollapse() }
                 }
             }
             .onChange(of: files.map { $0.selected }) {
@@ -700,6 +726,20 @@ private func formatBytes(_ b: UInt64) -> String {
 
 private func formatRate(_ bps: UInt64) -> String {
     "\(formatBytes(bps))/s"
+}
+
+private func formatETA(remaining: UInt64, bps: UInt64) -> String {
+    guard bps > 0 else { return "—" }
+    let seconds = remaining / bps
+    if seconds < 60 { return "<1m" }
+    let minutes = seconds / 60
+    if minutes < 60 { return "\(minutes)m" }
+    let hours = minutes / 60
+    let mins = minutes % 60
+    if hours < 24 { return mins == 0 ? "\(hours)h" : "\(hours)h \(mins)m" }
+    let days = hours / 24
+    let hrs = hours % 24
+    return hrs == 0 ? "\(days)d" : "\(days)d \(hrs)h"
 }
 
 #Preview {

@@ -9,6 +9,7 @@ extension NeoTorrentSession: @unchecked Sendable {}
 
 extension Notification.Name {
     static let neotorrentPasteFromClipboard = Notification.Name("neotorrent.pasteFromClipboard")
+    static let neotorrentOpenTorrentFile = Notification.Name("neotorrent.openTorrentFile")
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -58,6 +59,10 @@ struct NeoTorrentApp: App {
                 Button("About NeoTorrent") { showAboutPanel() }
             }
             CommandGroup(after: .newItem) {
+                Button("Open Torrent…") {
+                    NotificationCenter.default.post(name: .neotorrentOpenTorrentFile, object: nil)
+                }
+                .keyboardShortcut("o", modifiers: [.command])
                 Button("Add from Clipboard") {
                     NotificationCenter.default.post(name: .neotorrentPasteFromClipboard, object: nil)
                 }
@@ -99,7 +104,6 @@ struct NeoTorrentApp: App {
             string: "@lodev09",
             attributes: linkStyle.merging([.link: URL(string: "https://github.com/lodev09")!]) { $1 }
         ))
-        credits.append(NSAttributedString(string: "\n", attributes: tagline))
 
         NSApplication.shared.orderFrontStandardAboutPanel(options: [
             .credits: credits
