@@ -28,6 +28,7 @@ app: bindings xcode
 
 # Swift-only rebuild + launch (skips Rust + xcodegen; use after UI tweaks).
 run:
+    osascript -e 'tell application "NeoTorrent" to quit' >/dev/null 2>&1 || true
     xcodebuild \
         -project apps/NeoTorrent/NeoTorrent.xcodeproj \
         -scheme NeoTorrent \
