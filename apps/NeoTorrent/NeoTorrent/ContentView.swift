@@ -58,7 +58,7 @@ struct ContentView: View {
             }
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: sessionHolder.addError)
-        .containerBackground(.thickMaterial, for: .window)
+        // .containerBackground(.thickMaterial, for: .window)
         .navigationTitle("NeoTorrent")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -606,15 +606,12 @@ struct PendingRow: View {
                 .animation(.easeOut(duration: 0.08), value: isHovered)
             }
             .frame(height: 24)
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 ProgressView()
                     .progressViewStyle(.linear)
                     .tint(.secondary)
                     .frame(width: 100)
                     .fixedSize()
-                Text("Adding…")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
                 Spacer()
             }
         }
