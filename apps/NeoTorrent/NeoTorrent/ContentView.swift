@@ -321,7 +321,12 @@ struct TorrentRow: View {
                             .frame(width: 40, alignment: .leading)
                     }
                     .fixedSize()
-                    if paused {
+                    if torrent.isFinished {
+                        Text("Completed")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    } else if paused {
                         Text("Paused")
                             .font(.callout)
                             .foregroundStyle(.secondary)
@@ -374,7 +379,11 @@ struct TorrentRow: View {
         }
         .help("Reveal in Finder")
         Button {
-            confirmingRemove = true
+            if torrent.isFinished {
+                onRemove(false)
+            } else {
+                confirmingRemove = true
+            }
         } label: {
             Image(systemName: "trash")
         }
