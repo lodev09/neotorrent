@@ -80,10 +80,15 @@ impl NeoTorrentSession {
     }
 
     pub async fn add_magnet(&self, uri: &str) -> Result<Arc<ManagedTorrent>, SessionError> {
+        let add = if uri.starts_with("magnet:") || uri.starts_with("http:") || uri.starts_with("https:") {
+            AddTorrent::from_url(uri)
+        } else {
+            AddTorrent::from_local_filename(uri).map_err(|e| SessionError::Torrent(e.to_string()))?
+        };
         let resp = self
             .inner
             .add_torrent(
-                AddTorrent::from_url(uri),
+                add,
                 Some(AddTorrentOptions {
                     overwrite: true,
                     ..Default::default()

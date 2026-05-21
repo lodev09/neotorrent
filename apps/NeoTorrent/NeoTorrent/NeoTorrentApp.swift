@@ -46,6 +46,32 @@ struct NeoTorrentApp: App {
                 .environment(prefs)
         }
         .windowResizability(.contentSize)
+        .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About NeoTorrent") { showAboutPanel() }
+            }
+        }
+    }
+
+    private func showAboutPanel() {
+        let credits = NSMutableAttributedString()
+        let body: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+            .foregroundColor: NSColor.labelColor
+        ]
+        credits.append(NSAttributedString(string: "Project: ", attributes: body))
+        credits.append(NSAttributedString(
+            string: "github.com/lodev09/neotorrent",
+            attributes: body.merging([.link: URL(string: "https://github.com/lodev09/neotorrent")!]) { $1 }
+        ))
+        credits.append(NSAttributedString(string: "\nAuthor: ", attributes: body))
+        credits.append(NSAttributedString(
+            string: "@lodev09",
+            attributes: body.merging([.link: URL(string: "https://github.com/lodev09")!]) { $1 }
+        ))
+        NSApplication.shared.orderFrontStandardAboutPanel(options: [
+            .credits: credits
+        ])
     }
 
     private func start() async {

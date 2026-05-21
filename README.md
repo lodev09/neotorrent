@@ -106,3 +106,11 @@ drove the rewrite:
 - Keep WebTorrent-flavored WebRTC peer support on the roadmap (the
   `neotorrent-core` crates already speak it end-to-end against real WebTorrent
   peers)
+
+## License
+
+[MIT](LICENSE)
+
+---
+
+Made with ❤️ by [@lodev09](http://linkedin.com/in/lodev09/)

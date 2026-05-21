@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var expandedIDs: Set<UInt64> = []
     @State private var notifiedFinishedIDs: Set<UInt64> = []
     @State private var removingIDs: Set<UInt64> = []
+    @State private var playableURLs: [UInt64: URL] = [:]
     @State private var didInitialLoad = false
 
 
@@ -103,7 +104,9 @@ struct ContentView: View {
                         onToggleFile: { file, isSelected in
                             Task { await toggleFile(torrentID: t.id, file: file, isSelected: isSelected) }
                         },
-                        files: { sessionHolder.session.flatMap { try? $0.files(id: t.id) } ?? [] }
+                        files: { sessionHolder.session.flatMap { try? $0.files(id: t.id) } ?? [] },
+                        playURL: playableURLs[t.id],
+                        onPlay: { url in playInVLC(url: url) }
                     )
                 }
                 ForEach(sessionHolder.pendingAdds) { p in
@@ -148,6 +151,49 @@ struct ContentView: View {
         NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
     }
 
+    private func refreshPlayableURLs(for torrents: [TorrentSnapshot], session: NeoTorrentSession) {
+        var next: [UInt64: URL] = [:]
+        for t in torrents {
+            guard let files = try? session.files(id: t.id),
+                  let media = largestPlayableMedia(in: files) else { continue }
+            let base = session.streamUrl(id: t.id, fileIndex: media.index)
+            let filename = (media.path as NSString).lastPathComponent
+            let encoded = filename.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? filename
+            if let url = URL(string: "\(base)/\(encoded)") {
+                next[t.id] = url
+            }
+        }
+        if next != playableURLs { playableURLs = next }
+    }
+
+    private func largestPlayableMedia(in files: [TorrentFile]) -> TorrentFile? {
+        files
+            .filter { $0.selected && isMediaExtension(($0.path as NSString).pathExtension) }
+            .max(by: { $0.length < $1.length })
+    }
+
+    private func isMediaExtension(_ ext: String) -> Bool {
+        let media: Set<String> = [
+            "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v",
+            "mpg", "mpeg", "ts", "3gp",
+            "mp3", "m4a", "aac", "ogg", "flac", "wav", "opus"
+        ]
+        return media.contains(ext.lowercased())
+    }
+
+    private func playInVLC(url: URL) {
+        guard let vlcURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "org.videolan.vlc") else {
+            NSWorkspace.shared.open(url)
+            return
+        }
+        NSWorkspace.shared.open(
+            [url],
+            withApplicationAt: vlcURL,
+            configuration: NSWorkspace.OpenConfiguration(),
+            completionHandler: nil
+        )
+    }
+
     private func pickTorrentFile() {
         guard sessionHolder.session != nil else { return }
         let panel = NSOpenPanel()
@@ -171,21 +217,27 @@ struct ContentView: View {
     }
 
     private func handlePastedItems(_ providers: [NSItemProvider]) {
-        for p in providers {
-            _ = p.loadObject(ofClass: NSString.self) { obj, _ in
-                guard let raw = obj as? String else { return }
+        let pb = NSPasteboard.general
+        var candidates: [String] = []
+        if let urls = pb.readObjects(forClasses: [NSURL.self]) as? [URL] {
+            candidates.append(contentsOf: urls.map { $0.absoluteString })
+        }
+        if let strings = pb.readObjects(forClasses: [NSString.self]) as? [String] {
+            candidates.append(contentsOf: strings)
+        }
+        var seen: Set<String> = []
+        Task { @MainActor in
+            sessionHolder.addError = nil
+            for raw in candidates {
                 let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { return }
-                Task { @MainActor in
-                    sessionHolder.addError = nil
-                    do {
-                        _ = try await sessionHolder.add(uri: trimmed)
-                        await refresh()
-                    } catch {
-                        sessionHolder.addError = (error as? AddTorrentError)?.errorDescription ?? error.localizedDescription
-                    }
+                guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { continue }
+                do {
+                    _ = try await sessionHolder.add(uri: trimmed)
+                } catch {
+                    sessionHolder.addError = (error as? AddTorrentError)?.errorDescription ?? error.localizedDescription
                 }
             }
+            await refresh()
         }
     }
 
@@ -222,6 +274,7 @@ struct ContentView: View {
             .filter { !removingIDs.contains($0.id) }
             .sorted { $0.id < $1.id }
         sessionHolder.reconcilePending(against: Set(updated.map { $0.id }))
+        refreshPlayableURLs(for: torrents, session: session)
 
         if didInitialLoad && !newlyAdded.isEmpty {
             playSound("Pop")
@@ -284,6 +337,8 @@ struct TorrentRow: View {
     let onReveal: () -> Void
     let onToggleFile: (TorrentFile, Bool) -> Void
     let files: () -> [TorrentFile]
+    let playURL: URL?
+    let onPlay: (URL) -> Void
 
     @State private var confirmingRemove = false
     @State private var isHovered = false
@@ -374,6 +429,12 @@ struct TorrentRow: View {
 
     @ViewBuilder
     private var controls: some View {
+        if let playURL {
+            Button { onPlay(playURL) } label: {
+                Image(systemName: "play.fill")
+            }
+            .help("Play in VLC")
+        }
         Button(action: onReveal) {
             Image(systemName: "folder")
         }

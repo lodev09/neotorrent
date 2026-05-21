@@ -5,23 +5,23 @@ import AppKit
 @Observable
 final class Preferences {
     static let downloadDirKey = "preferences.downloadDir"
-    static let downloadKBpsKey = "preferences.downloadKBps"
-    static let uploadKBpsKey = "preferences.uploadKBps"
+    static let downloadMBpsKey = "preferences.downloadMBps"
+    static let uploadMBpsKey = "preferences.uploadMBps"
     static let playSoundsKey = "preferences.playSounds"
 
     var downloadDir: String {
         didSet { UserDefaults.standard.set(downloadDir, forKey: Self.downloadDirKey) }
     }
-    /// 0 = unlimited. Kilobytes per second.
-    var downloadKBps: Int {
+    /// 0 = unlimited. Megabytes per second.
+    var downloadMBps: Int {
         didSet {
-            UserDefaults.standard.set(downloadKBps, forKey: Self.downloadKBpsKey)
+            UserDefaults.standard.set(downloadMBps, forKey: Self.downloadMBpsKey)
             applyLimits()
         }
     }
-    var uploadKBps: Int {
+    var uploadMBps: Int {
         didSet {
-            UserDefaults.standard.set(uploadKBps, forKey: Self.uploadKBpsKey)
+            UserDefaults.standard.set(uploadMBps, forKey: Self.uploadMBpsKey)
             applyLimits()
         }
     }
@@ -40,8 +40,8 @@ final class Preferences {
     init() {
         let d = UserDefaults.standard
         self.downloadDir = d.string(forKey: Self.downloadDirKey) ?? Self.defaultDownloadDir
-        self.downloadKBps = d.integer(forKey: Self.downloadKBpsKey)
-        self.uploadKBps = d.integer(forKey: Self.uploadKBpsKey)
+        self.downloadMBps = d.integer(forKey: Self.downloadMBpsKey)
+        self.uploadMBps = d.integer(forKey: Self.uploadMBpsKey)
         // For bools, default to true if never set.
         self.playSounds = d.object(forKey: Self.playSoundsKey) as? Bool ?? true
     }
@@ -59,8 +59,8 @@ final class Preferences {
     private func applyLimits() {
         guard let session else { return }
         session.setRateLimits(
-            downloadBps: UInt32(max(0, downloadKBps) * 1024),
-            uploadBps: UInt32(max(0, uploadKBps) * 1024)
+            downloadBps: UInt32(max(0, downloadMBps) * 1024 * 1024),
+            uploadBps: UInt32(max(0, uploadMBps) * 1024 * 1024)
         )
     }
 }
@@ -103,8 +103,8 @@ struct SettingsView: View {
             }
 
             Section("Bandwidth") {
-                rateField("Max download", value: $bindable.downloadKBps)
-                rateField("Max upload", value: $bindable.uploadKBps)
+                rateField("Max download", value: $bindable.downloadMBps)
+                rateField("Max upload", value: $bindable.uploadMBps)
                 Text("0 = unlimited. Applies immediately, session-wide.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -208,7 +208,7 @@ struct SettingsView: View {
             TextField("", value: value, format: .number)
                 .frame(width: 80)
                 .multilineTextAlignment(.trailing)
-            Text("KB/s")
+            Text("MB/s")
                 .foregroundStyle(.secondary)
                 .font(.callout)
         }
