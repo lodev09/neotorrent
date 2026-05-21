@@ -39,7 +39,7 @@ struct NeoTorrentApp: App {
                 .environment(sessionHolder)
                 .environment(prefs)
                 .environment(posters)
-                .frame(minWidth: 640, idealWidth: 820, minHeight: 480, idealHeight: 640)
+                .frame(minWidth: 640, idealWidth: 820, minHeight: 320, idealHeight: 380)
                 .task { await start() }
                 .onOpenURL { url in
                     sessionHolder.handleOpenURL(url)
