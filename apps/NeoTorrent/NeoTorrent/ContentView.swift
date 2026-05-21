@@ -13,6 +13,8 @@ struct ContentView: View {
     @State private var notifiedFinishedIDs: Set<UInt64> = []
     @State private var removingIDs: Set<UInt64> = []
     @State private var playableURLs: [UInt64: URL] = [:]
+    @State private var playingTorrentID: UInt64?
+    @State private var playingProcess: Process?
     @State private var didInitialLoad = false
     @FocusState private var paneFocused: Bool
 
@@ -119,7 +121,8 @@ struct ContentView: View {
                         },
                         files: { sessionHolder.session.flatMap { try? $0.files(id: t.id) } ?? [] },
                         playURL: playableURLs[t.id],
-                        onPlay: { url in playInVLC(url: url) },
+                        isPlaying: playingTorrentID == t.id,
+                        onPlay: { url in togglePlayback(torrentID: t.id, url: url) },
                         poster: posters.image(for: t.infoHash)
                     )
                 }
@@ -208,17 +211,49 @@ struct ContentView: View {
         return media.contains(ext.lowercased())
     }
 
-    private func playInVLC(url: URL) {
-        guard let vlcURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "org.videolan.vlc") else {
+    private func togglePlayback(torrentID: UInt64, url: URL) {
+        if playingTorrentID == torrentID, let proc = playingProcess, proc.isRunning {
+            proc.terminate()
+            playingProcess = nil
+            playingTorrentID = nil
+            return
+        }
+        if let proc = playingProcess, proc.isRunning { proc.terminate() }
+        playingProcess = nil
+        playingTorrentID = nil
+        playInVLC(url: url, torrentID: torrentID)
+    }
+
+    private func playInVLC(url: URL, torrentID: UInt64) {
+        guard let vlcAppURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "org.videolan.vlc") else {
             NSWorkspace.shared.open(url)
             return
         }
-        NSWorkspace.shared.open(
-            [url],
-            withApplicationAt: vlcURL,
-            configuration: NSWorkspace.OpenConfiguration(),
-            completionHandler: nil
-        )
+        let binary = vlcAppURL.appendingPathComponent("Contents/MacOS/VLC")
+        guard FileManager.default.isExecutableFile(atPath: binary.path) else {
+            NSWorkspace.shared.open(url)
+            return
+        }
+        let proc = Process()
+        proc.executableURL = binary
+        proc.arguments = [url.absoluteString, "--play-and-exit"]
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        proc.terminationHandler = { [proc] _ in
+            Task { @MainActor in
+                if playingProcess === proc {
+                    playingProcess = nil
+                    playingTorrentID = nil
+                }
+            }
+        }
+        do {
+            try proc.run()
+            playingProcess = proc
+            playingTorrentID = torrentID
+        } catch {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     private func pickTorrentFile() {
@@ -369,6 +404,7 @@ struct TorrentRow: View {
     let onToggleFile: (TorrentFile, Bool) -> Void
     let files: () -> [TorrentFile]
     let playURL: URL?
+    let isPlaying: Bool
     let onPlay: (URL) -> Void
     let poster: NSImage?
 
@@ -392,9 +428,10 @@ struct TorrentRow: View {
                         .truncationMode(.middle)
                     Spacer()
                     controls
-                        .opacity(isHovered ? 1 : 0)
-                        .allowsHitTesting(isHovered)
+                        .opacity((isHovered || isPlaying) ? 1 : 0)
+                        .allowsHitTesting(isHovered || isPlaying)
                         .animation(.easeOut(duration: 0.08), value: isHovered)
+                        .animation(.easeOut(duration: 0.08), value: isPlaying)
                 }
                 .frame(height: 24)
                 HStack(spacing: 12) {
@@ -499,9 +536,10 @@ struct TorrentRow: View {
     private var controls: some View {
         if let playURL {
             Button { onPlay(playURL) } label: {
-                Image(systemName: "play.fill")
+                Image(systemName: isPlaying ? "stop.fill" : "play.fill")
+                    .foregroundStyle(isPlaying ? AnyShapeStyle(.red) : AnyShapeStyle(.primary))
             }
-            .help("Play in VLC")
+            .help(isPlaying ? "Stop VLC" : "Play in VLC")
         }
         Button(action: onReveal) {
             Image(systemName: "folder")
