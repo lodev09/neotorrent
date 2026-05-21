@@ -453,7 +453,13 @@ struct TorrentRow: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .shadow(color: Color.black.opacity(0.08), radius: 3, y: 1)
-        .onHover { isHovered = $0 }
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .onContinuousHover { phase in
+            switch phase {
+            case .active: isHovered = true
+            case .ended:  isHovered = false
+            }
+        }
         .confirmationDialog(
             "Remove \(torrent.name ?? "torrent")?",
             isPresented: $confirmingRemove,
@@ -551,7 +557,13 @@ struct PendingRow: View {
             }
         }
         .cardChrome()
-        .onHover { isHovered = $0 }
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .onContinuousHover { phase in
+            switch phase {
+            case .active: isHovered = true
+            case .ended:  isHovered = false
+            }
+        }
     }
 }
 
@@ -572,6 +584,10 @@ struct FileList: View {
     let files: [TorrentFile]
     let onToggle: (TorrentFile, Bool) -> Void
 
+    // Optimistic overrides — flip instantly on click; cleared once the
+    // backend's reported `selected` catches up (next poll tick).
+    @State private var pending: [UInt32: Bool] = [:]
+
     var body: some View {
         if files.isEmpty {
             HStack {
@@ -583,45 +599,62 @@ struct FileList: View {
             let showCheckbox = files.count > 1
             VStack(alignment: .leading, spacing: 3) {
                 ForEach(files, id: \.index) { f in
+                    let isOn = pending[f.index] ?? f.selected
                     HStack(spacing: 6) {
                         if showCheckbox {
                             Toggle("", isOn: Binding(
-                                get: { f.selected },
-                                set: { onToggle(f, $0) }
+                                get: { isOn },
+                                set: { newValue in
+                                    pending[f.index] = newValue
+                                    onToggle(f, newValue)
+                                }
                             ))
                             .toggleStyle(.checkbox)
                             .labelsHidden()
+                            .allowsHitTesting(false)
                         }
-                        Image(systemName: fileIcon(f))
-                            .foregroundStyle(fileIconColor(f))
+                        Image(systemName: fileIcon(f, selected: isOn))
+                            .foregroundStyle(fileIconColor(f, selected: isOn))
                         Text(f.path)
                             .font(.system(.callout, design: .monospaced))
-                            .foregroundStyle(f.selected ? .primary : .tertiary)
-                            .strikethrough(!f.selected)
+                            .foregroundStyle(isOn ? .primary : .tertiary)
+                            .strikethrough(!isOn)
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Spacer()
-                        Text(progressText(f))
+                        Text(progressText(f, selected: isOn))
                             .font(.callout.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        guard showCheckbox else { return }
+                        let newValue = !isOn
+                        pending[f.index] = newValue
+                        onToggle(f, newValue)
+                    }
+                }
+            }
+            .onChange(of: files.map { $0.selected }) {
+                pending = pending.filter { idx, val in
+                    files.first(where: { $0.index == idx })?.selected != val
                 }
             }
         }
     }
 
-    private func fileIcon(_ f: TorrentFile) -> String {
-        if !f.selected { return "minus.circle" }
+    private func fileIcon(_ f: TorrentFile, selected: Bool) -> String {
+        if !selected { return "minus.circle" }
         return f.downloaded >= f.length ? "checkmark.circle.fill" : "doc"
     }
 
-    private func fileIconColor(_ f: TorrentFile) -> Color {
-        if !f.selected { return .gray.opacity(0.6) }
+    private func fileIconColor(_ f: TorrentFile, selected: Bool) -> Color {
+        if !selected { return .gray.opacity(0.6) }
         return f.downloaded >= f.length ? .green : .secondary
     }
 
-    private func progressText(_ f: TorrentFile) -> String {
-        if !f.selected {
+    private func progressText(_ f: TorrentFile, selected: Bool) -> String {
+        if !selected {
             return "skipped (\(formatBytes(f.length)))"
         }
         if f.downloaded >= f.length {
