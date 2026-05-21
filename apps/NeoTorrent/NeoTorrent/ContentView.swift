@@ -58,6 +58,7 @@ struct ContentView: View {
             }
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: sessionHolder.addError)
+        .containerBackground(.thickMaterial, for: .window)
         .navigationTitle("NeoTorrent")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -68,6 +69,7 @@ struct ContentView: View {
                 .disabled(sessionHolder.session == nil)
             }
         }
+        .toolbarBackground(.hidden, for: .windowToolbar)
         .focusable()
         .focusEffectDisabled()
         .focused($paneFocused)
@@ -330,7 +332,7 @@ struct ContentView: View {
             if t.isFinished && !notifiedFinishedIDs.contains(t.id) {
                 if let prev = torrents.first(where: { $0.id == t.id }), !prev.isFinished {
                     postCompletionNotification(for: t)
-                    playSound("Glass")
+                    playSound("Funk")
                 }
                 notifiedFinishedIDs.insert(t.id)
             }
@@ -506,11 +508,10 @@ struct TorrentRow: View {
                             endPoint: .bottom
                         )
                     )
-            } else {
-                Rectangle().fill(.thickMaterial)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .glassCard(enabled: poster == nil, cornerRadius: 12)
         .shadow(color: Color.black.opacity(0.08), radius: 3, y: 1)
         .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .onContinuousHover { phase in
@@ -764,6 +765,21 @@ private func formatBytes(_ b: UInt64) -> String {
 
 private func formatRate(_ bps: UInt64) -> String {
     "\(formatBytes(bps))/s"
+}
+
+extension View {
+    @ViewBuilder
+    func glassCard(enabled: Bool, cornerRadius: CGFloat) -> some View {
+        if enabled {
+            if #available(macOS 26.0, *) {
+                self.glassEffect(.clear, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            } else {
+                self.background(.thickMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            }
+        } else {
+            self
+        }
+    }
 }
 
 private func formatETA(remaining: UInt64, bps: UInt64) -> String {
