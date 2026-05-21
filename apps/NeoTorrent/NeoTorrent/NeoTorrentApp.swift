@@ -80,6 +80,8 @@ struct NeoTorrentApp: App {
         let linkStyle: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 11, weight: .medium),
             .foregroundColor: NSColor.linkColor,
+            .underlineStyle: 0,
+            .underlineColor: NSColor.clear,
             .paragraphStyle: para
         ]
 
@@ -89,14 +91,15 @@ struct NeoTorrentApp: App {
             attributes: tagline
         ))
         credits.append(NSAttributedString(
-            string: "github.com/lodev09/neotorrent",
+            string: "Github",
             attributes: linkStyle.merging([.link: URL(string: "https://github.com/lodev09/neotorrent")!]) { $1 }
         ))
-        credits.append(NSAttributedString(string: "\n", attributes: tagline))
+        credits.append(NSAttributedString(string: "  ·  ", attributes: tagline))
         credits.append(NSAttributedString(
             string: "@lodev09",
             attributes: linkStyle.merging([.link: URL(string: "https://github.com/lodev09")!]) { $1 }
         ))
+        credits.append(NSAttributedString(string: "\n", attributes: tagline))
 
         NSApplication.shared.orderFrontStandardAboutPanel(options: [
             .credits: credits
