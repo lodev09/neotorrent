@@ -53,8 +53,8 @@ release:
 dmg: release
     APP_PATH="$PWD/build/Build/Products/Release/NeoTorrent.app" ./scripts/package-dmg.sh
 
-# Tag + push a release (kicks off the GitHub Actions release workflow).
-ship version:
+# Tag + push a release (prompts for version; defaults to bumping the patch).
+ship version="":
     ./scripts/release.sh {{version}}
 
 # ── Quality ──────────────────────────────────────────────────────────────

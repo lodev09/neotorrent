@@ -1,24 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Tag a release and push, kicking off the GitHub Actions release workflow.
-# Usage: ./scripts/release.sh 0.1.0
-
-if [ $# -ne 1 ]; then
-    echo "usage: $0 <version>   e.g. $0 0.1.0" >&2
-    exit 2
-fi
-
-VERSION="$1"
-TAG="v$VERSION"
-
-if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "error: version must be MAJOR.MINOR.PATCH (got '$VERSION')" >&2
-    exit 1
-fi
+# Bump version in project.yml, commit, tag, push — triggers the release workflow.
+# Usage:
+#   ./scripts/release.sh           # prompts, defaults to bumping the patch
+#   ./scripts/release.sh 0.2.0     # use the given version
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+
+PROJECT="apps/NeoTorrent/project.yml"
 
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 if [ "$BRANCH" != "main" ]; then
@@ -28,11 +19,6 @@ fi
 
 if ! git diff-index --quiet HEAD --; then
     echo "error: working tree has uncommitted changes" >&2
-    exit 1
-fi
-
-if git rev-parse "$TAG" >/dev/null 2>&1; then
-    echo "error: tag $TAG already exists" >&2
     exit 1
 fi
 
@@ -47,14 +33,69 @@ if [ "$LOCAL" != "$REMOTE" ]; then
     exit 1
 fi
 
-echo
-echo "Tag $TAG @ $(git rev-parse --short HEAD)"
-git log -1 --pretty=format:'    %s%n'
-read -r -p "Push tag and trigger release? [y/N] " ans
+CURRENT="$(/usr/bin/sed -n 's/.*CFBundleShortVersionString: "\([^"]*\)".*/\1/p' "$PROJECT" | head -n1)"
+LATEST="$(git tag --list 'v*.*.*' --sort=-v:refname | head -n1 || true)"
+
+if [ -n "$LATEST" ]; then
+    IFS='.' read -r MAJ MIN PAT <<<"${LATEST#v}"
+    DEFAULT="$MAJ.$MIN.$((PAT + 1))"
+else
+    DEFAULT="${CURRENT:-0.1.0}"
+fi
+
+VERSION="${1:-}"
+if [ -z "$VERSION" ]; then
+    echo "Current version: ${CURRENT:-<unknown>}"
+    echo "Latest tag:      ${LATEST:-<none>}"
+    read -r -p "Version [$DEFAULT]: " VERSION
+    VERSION="${VERSION:-$DEFAULT}"
+fi
+
+if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "error: version must be MAJOR.MINOR.PATCH (got '$VERSION')" >&2
+    exit 1
+fi
+
+TAG="v$VERSION"
+if git rev-parse "$TAG" >/dev/null 2>&1; then
+    echo "error: tag $TAG already exists" >&2
+    exit 1
+fi
+
+cat <<EOF
+
+────────── Release summary ──────────
+  Branch:   $BRANCH @ $(git rev-parse --short HEAD)
+  Bump:     ${CURRENT:-<unknown>} → $VERSION
+  Tag:      $TAG
+  Last:     $(git log -1 --pretty=format:'%s')
+
+  Will:
+    1. set CFBundleShortVersionString + CFBundleVersion = "$VERSION" in $PROJECT
+    2. commit "Bump version to $VERSION"
+    3. push origin main
+    4. tag $TAG and push (triggers release workflow)
+─────────────────────────────────────
+EOF
+read -r -p "Proceed? [y/N] " ans
 case "$ans" in
     y|Y|yes) ;;
     *) echo "aborted."; exit 0 ;;
 esac
+
+/usr/bin/sed -i '' \
+    -e "s/CFBundleShortVersionString: \"[^\"]*\"/CFBundleShortVersionString: \"$VERSION\"/" \
+    -e "s/CFBundleVersion: \"[^\"]*\"/CFBundleVersion: \"$VERSION\"/" \
+    "$PROJECT"
+
+if git diff --quiet -- "$PROJECT"; then
+    echo "error: $PROJECT unchanged (was the version already $VERSION?)" >&2
+    exit 1
+fi
+
+git add "$PROJECT"
+git commit -m "Bump version to $VERSION"
+git push origin main
 
 git tag -a "$TAG" -m "$TAG"
 git push origin "$TAG"

@@ -6,9 +6,6 @@ on:
       - 'v*.*.*'
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Version (e.g. 0.1.0). Used for the DMG filename and bundle version.'
-        required: true
       publish:
         description: 'Create a GitHub release and upload the DMG'
         type: boolean
@@ -31,11 +28,15 @@ jobs:
       - name: Determine version
         id: version
         run: |
+          VERSION="$(/usr/bin/sed -n 's/.*CFBundleShortVersionString: "\([^"]*\)".*/\1/p' apps/NeoTorrent/project.yml | head -n1)"
           if [ "${{ github.event_name }}" = "push" ]; then
-            VERSION="${GITHUB_REF_NAME#v}"
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+            if [ "$TAG_VERSION" != "$VERSION" ]; then
+              echo "error: tag $GITHUB_REF_NAME does not match project.yml version $VERSION" >&2
+              exit 1
+            fi
             PUBLISH="true"
           else
-            VERSION="${{ inputs.version }}"
             PUBLISH="${{ inputs.publish }}"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -50,13 +51,6 @@ jobs:
           targets: aarch64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
-
-      - name: Patch version into project.yml
-        run: |
-          /usr/bin/sed -i '' \
-            -e 's/CFBundleShortVersionString: "[^"]*"/CFBundleShortVersionString: "${{ steps.version.outputs.version }}"/' \
-            -e "s/CFBundleVersion: \"[^\"]*\"/CFBundleVersion: \"${GITHUB_RUN_NUMBER}\"/" \
-            apps/NeoTorrent/project.yml
 
       - name: Import signing certificate
         env:
