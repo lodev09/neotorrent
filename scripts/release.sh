@@ -52,6 +52,7 @@ NEXT_BUILD=$((CURRENT_BUILD + 1))
 VERSION="${1:-}"
 if [ -z "$VERSION" ]; then
     echo "Current version: ${CURRENT:-<unknown>}"
+    echo "Current build:   $CURRENT_BUILD"
     echo "Latest tag:      ${LATEST:-<none>}"
     read -r -p "Version [$DEFAULT]: " VERSION
     VERSION="${VERSION:-$DEFAULT}"
