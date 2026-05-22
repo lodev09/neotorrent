@@ -36,12 +36,11 @@ fi
 CURRENT="$(/usr/bin/sed -n 's/.*CFBundleShortVersionString: "\([^"]*\)".*/\1/p' "$PROJECT" | head -n1)"
 LATEST="$(git tag --list 'v*.*.*' --sort=-v:refname | head -n1 || true)"
 
-if [ -n "$LATEST" ]; then
-    IFS='.' read -r MAJ MIN PAT <<<"${LATEST#v}"
-    DEFAULT="$MAJ.$MIN.$((PAT + 1))"
-else
-    DEFAULT="${CURRENT:-0.1.0}"
-fi
+BASE="${LATEST#v}"
+BASE="${BASE:-$CURRENT}"
+BASE="${BASE:-0.1.0}"
+IFS='.' read -r MAJ MIN PAT <<<"$BASE"
+DEFAULT="$MAJ.$MIN.$((PAT + 1))"
 
 VERSION="${1:-}"
 if [ -z "$VERSION" ]; then
