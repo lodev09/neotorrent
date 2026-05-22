@@ -40,53 +40,10 @@ The WebRTC modules (`peer.rs`, `tracker.rs`, `wire.rs`, `extension.rs`,
 wired into the librqbit-backed download path. They're kept in tree for a future
 hybrid client that also speaks WebRTC.
 
-## Build
+## Contributing
 
-Prerequisites:
-
-- macOS 15+ (Apple Silicon)
-- Xcode (for `xcodebuild`)
-- Rust (any install method — script discovers cargo from PATH,
-  `$HOME/.cargo/bin`, `/opt/homebrew/bin`, or `/usr/local/bin`; or set
-  `CARGO_BIN_DIR`)
-- [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`)
-- [`just`](https://github.com/casey/just) (`brew install just`)
-
-Common tasks:
-
-```sh
-just              # list recipes
-just app          # build the .app
-just run          # build + launch
-just test         # cargo test
-just check        # fmt + clippy + tests (preflight)
-just clean        # wipe build artifacts
-```
-
-Or open `apps/NeoTorrent/NeoTorrent.xcodeproj` in Xcode and ⌘R. The scheme's
-pre-build action calls `scripts/build-rust.sh` automatically.
-
-## Project layout
-
-```
-neotorrent/
-├── Cargo.toml                  # workspace
-├── justfile                    # task runner (see `just --list`)
-├── scripts/build-rust.sh       # cargo build + uniffi-bindgen → Generated/
-├── crates/
-│   ├── neotorrent-core/        # torrent engine
-│   └── neotorrent-ffi/         # UniFFI bindings + bindgen bin
-└── apps/NeoTorrent/
-    ├── project.yml             # XcodeGen spec (Info.plist + entitlements)
-    └── NeoTorrent/             # SwiftUI sources
-```
-
-## Tests
-
-```sh
-just test       # unit tests
-just test-net   # network smoke tests (Sintel fetch over WebRTC)
-```
+Build, layout, tests, and release workflow are documented in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Built on
 
