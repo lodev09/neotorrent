@@ -52,8 +52,14 @@ Run `just check` (fmt + clippy + tests) before pushing.
 
 ## Release
 
-`apps/NeoTorrent/project.yml` is the single source of truth for the app version.
-`just ship` bumps it, commits, tags, and pushes — which kicks off the
+`apps/NeoTorrent/project.yml` is the single source of truth for both the
+marketing version (`CFBundleShortVersionString`) and the build number
+(`CFBundleVersion`). Build number is a plain integer counter, kept independent
+of the marketing version so re-shipping the same marketing version (e.g. App
+Store hotfix) still satisfies Apple's strict-monotonic build rule.
+
+`just ship` bumps the marketing version to the chosen value, increments the
+build counter by one, commits, tags, and pushes — which kicks off the
 [release workflow](.github/workflows/release.yml) (build → sign → notarize →
 DMG → GitHub release).
 

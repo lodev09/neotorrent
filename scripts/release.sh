@@ -34,6 +34,7 @@ if [ "$LOCAL" != "$REMOTE" ]; then
 fi
 
 CURRENT="$(/usr/bin/sed -n 's/.*CFBundleShortVersionString: "\([^"]*\)".*/\1/p' "$PROJECT" | head -n1)"
+CURRENT_BUILD="$(/usr/bin/sed -n 's/.*CFBundleVersion: "\([^"]*\)".*/\1/p' "$PROJECT" | head -n1)"
 LATEST="$(git tag --list 'v*.*.*' --sort=-v:refname | head -n1 || true)"
 
 BASE="${LATEST#v}"
@@ -41,6 +42,12 @@ BASE="${BASE:-$CURRENT}"
 BASE="${BASE:-0.1.0}"
 IFS='.' read -r MAJ MIN PAT <<<"$BASE"
 DEFAULT="$MAJ.$MIN.$((PAT + 1))"
+
+if ! [[ "$CURRENT_BUILD" =~ ^[0-9]+$ ]]; then
+    echo "error: CFBundleVersion in $PROJECT must be a plain integer (got '$CURRENT_BUILD')" >&2
+    exit 1
+fi
+NEXT_BUILD=$((CURRENT_BUILD + 1))
 
 VERSION="${1:-}"
 if [ -z "$VERSION" ]; then
@@ -64,13 +71,14 @@ fi
 cat <<EOF
 
 ────────── Release summary ──────────
-  Branch:   $BRANCH @ $(git rev-parse --short HEAD)
-  Bump:     ${CURRENT:-<unknown>} → $VERSION
-  Tag:      $TAG
-  Last:     $(git log -1 --pretty=format:'%s')
+  Branch:    $BRANCH @ $(git rev-parse --short HEAD)
+  Version:   ${CURRENT:-<unknown>} → $VERSION
+  Build:     ${CURRENT_BUILD} → $NEXT_BUILD
+  Tag:       $TAG
+  Last:      $(git log -1 --pretty=format:'%s')
 
   Will:
-    1. set CFBundleShortVersionString + CFBundleVersion = "$VERSION" in $PROJECT
+    1. set CFBundleShortVersionString="$VERSION", CFBundleVersion="$NEXT_BUILD" in $PROJECT
     2. commit "Bump version to $VERSION"
     3. push origin main
     4. tag $TAG and push (triggers release workflow)
@@ -84,7 +92,7 @@ esac
 
 /usr/bin/sed -i '' \
     -e "s/CFBundleShortVersionString: \"[^\"]*\"/CFBundleShortVersionString: \"$VERSION\"/" \
-    -e "s/CFBundleVersion: \"[^\"]*\"/CFBundleVersion: \"$VERSION\"/" \
+    -e "s/CFBundleVersion: \"[^\"]*\"/CFBundleVersion: \"$NEXT_BUILD\"/" \
     "$PROJECT"
 
 if git diff --quiet -- "$PROJECT"; then
