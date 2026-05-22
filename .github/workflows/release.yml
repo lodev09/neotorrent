@@ -17,13 +17,24 @@ permissions:
 jobs:
   build:
     name: Build + sign
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 60
     outputs:
       version: ${{ steps.version.outputs.version }}
       publish: ${{ steps.version.outputs.publish }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Select Xcode 26
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort | tail -n1)"
+          if [ -z "$XCODE" ]; then
+            echo "error: no Xcode 26 found in /Applications" >&2
+            ls /Applications | grep -i xcode || true
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
 
       - name: Determine version
         id: version
@@ -109,7 +120,7 @@ jobs:
   notarize:
     name: Notarize + package + release
     needs: build
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
