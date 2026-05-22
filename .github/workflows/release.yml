@@ -23,7 +23,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       publish: ${{ steps.version.outputs.publish }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Select Xcode 26
         run: |
@@ -106,7 +106,7 @@ jobs:
           /usr/bin/ditto -c -k --keepParent "$APP" "NeoTorrent-signed.zip"
 
       - name: Upload signed app artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: neotorrent-signed-app
           path: NeoTorrent-signed.zip
@@ -123,13 +123,13 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install packaging tools
         run: brew install create-dmg
 
       - name: Download signed app artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: neotorrent-signed-app
 
@@ -172,7 +172,7 @@ jobs:
           xcrun stapler staple "$DMG"
 
       - name: Upload DMG artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: NeoTorrent-${{ needs.build.outputs.version }}-dmg
           path: dist/NeoTorrent-${{ needs.build.outputs.version }}.dmg
