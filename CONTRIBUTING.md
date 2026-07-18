@@ -69,6 +69,6 @@ just ship 0.2.0     # explicit version
 ```
 
 Requirements: clean working tree on `main`, in sync with `origin/main`, and the
-secrets `APPLE_*` + `KEYCHAIN_PASSWORD` configured on the repo for signing /
+secrets `APPLE_*` configured on the repo for signing /
 notarization. To do a manual dry-run build without publishing, trigger the
 workflow from the Actions tab with `publish: false`.

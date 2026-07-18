@@ -7,16 +7,15 @@ set -euo pipefail
 # Required env:
 #   CERT_P12_BASE64    — base64-encoded .p12
 #   CERT_PASSWORD      — password the .p12 was exported with
-#   KEYCHAIN_PASSWORD  — password to lock the throwaway keychain
 #   RUNNER_TEMP        — provided by GitHub Actions
 
 : "${CERT_P12_BASE64:?CERT_P12_BASE64 not set}"
 : "${CERT_PASSWORD:?CERT_PASSWORD not set}"
-: "${KEYCHAIN_PASSWORD:?KEYCHAIN_PASSWORD not set}"
 : "${RUNNER_TEMP:?RUNNER_TEMP not set}"
 
 CERT_PATH="$RUNNER_TEMP/cert.p12"
 KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+KEYCHAIN_PASSWORD="$(uuidgen)"
 
 echo -n "$CERT_P12_BASE64" | base64 --decode -o "$CERT_PATH"
 
