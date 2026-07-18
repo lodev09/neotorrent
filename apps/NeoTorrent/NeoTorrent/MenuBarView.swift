@@ -34,6 +34,11 @@ struct MenuBarView: View {
     // local @State at the store's poll cadence to force fresh body passes.
     @State private var tick = false
 
+    // The MenuBarExtra panel sizes to the content's *ideal* height, and a
+    // ScrollView's ideal height is zero — so it collapses and the list never
+    // shows. Measure the list content and size the ScrollView explicitly.
+    @State private var listHeight: CGFloat = 0
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -59,15 +64,20 @@ struct MenuBarView: View {
                         }
                     }
                     .padding(6)
+                    .onGeometryChange(for: CGFloat.self) { proxy in
+                        proxy.size.height
+                    } action: { height in
+                        listHeight = height
+                    }
                 }
-                .frame(maxHeight: 340)
+                .frame(height: min(listHeight, 340))
             }
             Divider()
             footer
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
         }
-        .frame(width: 340)
+        .frame(width: 380)
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
             tick.toggle()
         }
@@ -124,7 +134,7 @@ struct MenuBarView: View {
     }
 
     private var footer: some View {
-        HStack {
+        HStack(spacing: 12) {
             Button {
                 openWindow(id: "main")
                 NSApp.activate(ignoringOtherApps: true)
@@ -213,30 +223,33 @@ private struct MenuBarTorrentRow: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer()
-            if canPlay {
-                Button(action: onPlay) {
-                    Image(systemName: isPlaying ? "stop.fill" : "play.fill")
+            HStack(spacing: 12) {
+                if canPlay {
+                    Button(action: onPlay) {
+                        Image(systemName: isPlaying ? "stop.fill" : "play.fill")
+                            .font(.caption2)
+                            .foregroundStyle(isPlaying ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                    }
+                    .buttonStyle(.plain)
+                    .help(isPlaying ? "Stop VLC" : "Stream in VLC")
+                    .opacity((isHovered || isPlaying) ? 1 : 0)
+                }
+                Button {
+                    if torrent.isFinished {
+                        onRemove(false)
+                    } else {
+                        confirmingRemove = true
+                    }
+                } label: {
+                    Image(systemName: "trash")
                         .font(.caption2)
-                        .foregroundStyle(isPlaying ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help(isPlaying ? "Stop VLC" : "Stream in VLC")
-                .opacity((isHovered || isPlaying) ? 1 : 0)
+                .help("Remove torrent")
+                .opacity(isHovered ? 1 : 0)
             }
-            Button {
-                if torrent.isFinished {
-                    onRemove(false)
-                } else {
-                    confirmingRemove = true
-                }
-            } label: {
-                Image(systemName: "trash")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Remove torrent")
-            .opacity(isHovered ? 1 : 0)
+            .padding(.leading, 4)
         }
     }
 

@@ -87,6 +87,9 @@ struct NeoTorrentApp: App {
                 .environment(store)
         } label: {
             MenuBarLabel(store: store)
+                // Start the engine even when the main window never appears
+                // (e.g. menu-bar-only launch with the dock icon hidden).
+                .task { await sessionHolder.start(prefs: prefs, store: store, posters: posters) }
         }
         .menuBarExtraStyle(.window)
 
@@ -205,9 +208,12 @@ final class SessionHolder {
     var pendingAdds: [PendingTorrent] = []
     private var preStartQueue: [String] = []
     private var cancelledPending: Set<UUID> = []
+    private var isStarting = false
 
     func start(prefs: Preferences, store: TorrentStore, posters: PosterStore) async {
-        guard session == nil else { return }
+        guard session == nil, !isStarting else { return }
+        isStarting = true
+        defer { isStarting = false }
         startupError = nil
         let downloadDir = prefs.downloadDir
         let stateDir = (NSHomeDirectory() as NSString)
