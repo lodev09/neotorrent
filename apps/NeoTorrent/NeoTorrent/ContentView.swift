@@ -1,30 +1,29 @@
 import SwiftUI
 import AppKit
-import AVFoundation
 import UniformTypeIdentifiers
-import UserNotifications
 
 struct ContentView: View {
     @Environment(SessionHolder.self) private var sessionHolder
     @Environment(Preferences.self) private var prefs
     @Environment(PosterStore.self) private var posters
-    @State private var torrents: [TorrentSnapshot] = []
+    @Environment(TorrentStore.self) private var store
     @State private var expandedIDs: Set<UInt64> = []
-    @State private var notifiedFinishedIDs: Set<UInt64> = []
-    @State private var removingIDs: Set<UInt64> = []
-    @State private var playableURLs: [UInt64: URL] = [:]
-    @State private var playingTorrentID: UInt64?
-    @State private var playingProcess: Process?
-    @State private var didInitialLoad = false
     @FocusState private var paneFocused: Bool
 
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let err = sessionHolder.startupError {
-                Label(err, systemImage: "exclamationmark.octagon")
-                    .foregroundStyle(.red)
-                    .padding()
+                ContentUnavailableView {
+                    Label("Engine Didn't Start", systemImage: "exclamationmark.octagon")
+                } description: {
+                    Text(err)
+                } actions: {
+                    Button("Try Again") {
+                        Task { await sessionHolder.start(prefs: prefs, store: store, posters: posters) }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 torrentList
             }
@@ -82,8 +81,6 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .neotorrentOpenTorrentFile)) { _ in
             pickTorrentFile()
         }
-        .task { await pollLoop() }
-        .task { await requestNotificationAuth() }
         .task(id: sessionHolder.addError) {
             guard sessionHolder.addError != nil else { return }
             try? await Task.sleep(for: .seconds(5))
@@ -94,43 +91,30 @@ struct ContentView: View {
     private var torrentList: some View {
         ScrollView {
             VStack(spacing: 10) {
-                ForEach(torrents, id: \.id) { t in
+                ForEach(store.torrents, id: \.id) { t in
                     TorrentRow(
                         torrent: t,
                         expanded: expandedIDs.contains(t.id),
                         onToggle: { toggleExpanded(t.id) },
-                        onPause: {
-                            playSound("Morse")
-                            Task { try? await sessionHolder.session?.pause(id: t.id) }
-                        },
-                        onResume: {
-                            playSound("Morse")
-                            Task { try? await sessionHolder.session?.resume(id: t.id) }
-                        },
+                        onPause: { store.pause(id: t.id) },
+                        onResume: { store.resume(id: t.id) },
                         onRemove: { deleteFiles in
-                            playSound("Bottle")
-                            removingIDs.insert(t.id)
-                            torrents.removeAll { $0.id == t.id }
-                            notifiedFinishedIDs.remove(t.id)
-                            Task {
-                                try? await sessionHolder.session?.remove(id: t.id, deleteFiles: deleteFiles)
-                                removingIDs.remove(t.id)
-                            }
+                            store.remove(id: t.id, deleteFiles: deleteFiles)
                         },
-                        onReveal: { revealInFinder(id: t.id) },
+                        onReveal: { store.revealInFinder(id: t.id) },
                         onToggleFile: { file, isSelected in
                             Task { await toggleFile(torrentID: t.id, file: file, isSelected: isSelected) }
                         },
                         files: { sessionHolder.session.flatMap { try? $0.files(id: t.id) } ?? [] },
-                        playURL: playableURLs[t.id],
-                        isPlaying: playingTorrentID == t.id,
-                        onPlay: { url in togglePlayback(torrentID: t.id, url: url) },
+                        playURL: store.playableURLs[t.id],
+                        isPlaying: store.playingTorrentID == t.id,
+                        onPlay: { store.togglePlayback(id: t.id) },
                         poster: posters.image(for: t.infoHash)
                     )
                 }
                 ForEach(sessionHolder.pendingAdds) { p in
                     PendingRow(name: p.name, onRemove: {
-                        playSound("Bottle")
+                        store.playSound("Bottle")
                         sessionHolder.cancelPending(p.id)
                     })
                 }
@@ -166,98 +150,6 @@ struct ContentView: View {
         }
     }
 
-    private func revealInFinder(id: UInt64) {
-        guard let session = sessionHolder.session,
-              let path = try? session.outputFolder(id: id) else { return }
-        NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
-    }
-
-    private func refreshPlayableURLs(for torrents: [TorrentSnapshot], session: NeoTorrentSession) {
-        var next: [UInt64: URL] = [:]
-        for t in torrents {
-            guard let files = try? session.files(id: t.id),
-                  let media = largestPlayableMedia(in: files) else { continue }
-            let base = session.streamUrl(id: t.id, fileIndex: media.index)
-            let filename = (media.path as NSString).lastPathComponent
-            let encoded = filename.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? filename
-            if let url = URL(string: "\(base)/\(encoded)") {
-                next[t.id] = url
-            }
-            if media.downloaded > 0, let local = localFileURL(torrentID: t.id, file: media, session: session) {
-                posters.ensure(infoHash: t.infoHash, fileURL: local)
-            }
-        }
-        if next != playableURLs { playableURLs = next }
-    }
-
-    private func localFileURL(torrentID: UInt64, file: TorrentFile, session: NeoTorrentSession) -> URL? {
-        guard let folder = try? session.outputFolder(id: torrentID) else { return nil }
-        var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: folder, isDirectory: &isDir) else { return nil }
-        let url = URL(fileURLWithPath: folder)
-        return isDir.boolValue ? url.appendingPathComponent(file.path) : url
-    }
-
-    private func largestPlayableMedia(in files: [TorrentFile]) -> TorrentFile? {
-        files
-            .filter { $0.selected && isMediaExtension(($0.path as NSString).pathExtension) }
-            .max(by: { $0.length < $1.length })
-    }
-
-    private func isMediaExtension(_ ext: String) -> Bool {
-        let media: Set<String> = [
-            "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v",
-            "mpg", "mpeg", "ts", "3gp",
-            "mp3", "m4a", "aac", "ogg", "flac", "wav", "opus"
-        ]
-        return media.contains(ext.lowercased())
-    }
-
-    private func togglePlayback(torrentID: UInt64, url: URL) {
-        if playingTorrentID == torrentID, let proc = playingProcess, proc.isRunning {
-            proc.terminate()
-            playingProcess = nil
-            playingTorrentID = nil
-            return
-        }
-        if let proc = playingProcess, proc.isRunning { proc.terminate() }
-        playingProcess = nil
-        playingTorrentID = nil
-        playInVLC(url: url, torrentID: torrentID)
-    }
-
-    private func playInVLC(url: URL, torrentID: UInt64) {
-        guard let vlcAppURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "org.videolan.vlc") else {
-            NSWorkspace.shared.open(url)
-            return
-        }
-        let binary = vlcAppURL.appendingPathComponent("Contents/MacOS/VLC")
-        guard FileManager.default.isExecutableFile(atPath: binary.path) else {
-            NSWorkspace.shared.open(url)
-            return
-        }
-        let proc = Process()
-        proc.executableURL = binary
-        proc.arguments = [url.absoluteString, "--play-and-exit"]
-        proc.standardOutput = FileHandle.nullDevice
-        proc.standardError = FileHandle.nullDevice
-        proc.terminationHandler = { [proc] _ in
-            Task { @MainActor in
-                if playingProcess === proc {
-                    playingProcess = nil
-                    playingTorrentID = nil
-                }
-            }
-        }
-        do {
-            try proc.run()
-            playingProcess = proc
-            playingTorrentID = torrentID
-        } catch {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
     private func pickTorrentFile() {
         guard sessionHolder.session != nil else { return }
         let panel = NSOpenPanel()
@@ -276,7 +168,7 @@ struct ContentView: View {
                 do { _ = try await sessionHolder.add(uri: url.path) }
                 catch { sessionHolder.addError = friendlyAddError(error) }
             }
-            await refresh()
+            store.refresh()
         }
     }
 
@@ -305,7 +197,7 @@ struct ContentView: View {
                     sessionHolder.addError = friendlyAddError(error)
                 }
             }
-            await refresh()
+            store.refresh()
         }
     }
 
@@ -318,42 +210,7 @@ struct ContentView: View {
                     sessionHolder.addError = friendlyAddError(error)
                 }
             }
-            await refresh()
-        }
-    }
-
-    private func refresh() async {
-        guard let session = sessionHolder.session else { return }
-        let updated = session.list()
-        let previousIDs = Set(torrents.map { $0.id })
-        let newlyAdded = updated.filter { !previousIDs.contains($0.id) }
-
-        for t in updated {
-            if t.isFinished && !notifiedFinishedIDs.contains(t.id) {
-                if let prev = torrents.first(where: { $0.id == t.id }), !prev.isFinished {
-                    postCompletionNotification(for: t)
-                    playSound("Funk")
-                }
-                notifiedFinishedIDs.insert(t.id)
-            }
-        }
-
-        torrents = updated
-            .filter { !removingIDs.contains($0.id) }
-            .sorted { $0.id < $1.id }
-        sessionHolder.reconcilePending(against: Set(updated.map { $0.id }))
-        refreshPlayableURLs(for: torrents, session: session)
-
-        if didInitialLoad && !newlyAdded.isEmpty {
-            playSound("Pop")
-        }
-        didInitialLoad = true
-    }
-
-    private func pollLoop() async {
-        while !Task.isCancelled {
-            await refresh()
-            try? await Task.sleep(for: .seconds(1))
+            store.refresh()
         }
     }
 
@@ -370,29 +227,6 @@ struct ContentView: View {
         }
         try? await session.setOnlyFiles(id: torrentID, indices: indices)
     }
-
-    private func playSound(_ name: String) {
-        guard prefs.playSounds else { return }
-        NSSound(named: name)?.play()
-    }
-
-    private func requestNotificationAuth() async {
-        _ = try? await UNUserNotificationCenter.current()
-            .requestAuthorization(options: [.alert, .sound])
-    }
-
-    private func postCompletionNotification(for t: TorrentSnapshot) {
-        let content = UNMutableNotificationContent()
-        content.title = "Download complete"
-        content.body = t.name ?? "Torrent finished"
-        content.sound = .default
-        let req = UNNotificationRequest(
-            identifier: "neotorrent-finished-\(t.id)",
-            content: content,
-            trigger: nil
-        )
-        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
-    }
 }
 
 struct TorrentRow: View {
@@ -407,7 +241,7 @@ struct TorrentRow: View {
     let files: () -> [TorrentFile]
     let playURL: URL?
     let isPlaying: Bool
-    let onPlay: (URL) -> Void
+    let onPlay: () -> Void
     let poster: NSImage?
 
     @State private var confirmingRemove = false
@@ -531,12 +365,12 @@ struct TorrentRow: View {
         }
     }
 
-    private var paused: Bool { torrent.state.lowercased() == "paused" }
+    private var paused: Bool { torrent.isPaused }
 
     @ViewBuilder
     private var controls: some View {
-        if let playURL {
-            Button { onPlay(playURL) } label: {
+        if playURL != nil {
+            Button { onPlay() } label: {
                 Image(systemName: isPlaying ? "stop.fill" : "play.fill")
                     .foregroundStyle(isPlaying ? AnyShapeStyle(.red) : AnyShapeStyle(.primary))
             }
@@ -565,8 +399,7 @@ struct TorrentRow: View {
 
     private var stateColor: Color {
         if torrent.isFinished { return .green }
-        if torrent.state.lowercased() == "paused" { return .gray }
-        return .blue
+        return paused ? .gray : .blue
     }
 
     private func stat(_ icon: String, _ value: String) -> some View {
@@ -752,18 +585,6 @@ private final class URLBox: @unchecked Sendable {
     func snapshot() -> [URL] { lock.lock(); defer { lock.unlock() }; return urls }
 }
 
-private func formatBytes(_ b: UInt64) -> String {
-    let f = ByteCountFormatter()
-    f.allowedUnits = [.useKB, .useMB, .useGB, .useTB]
-    f.countStyle = .file
-    f.allowsNonnumericFormatting = false
-    return f.string(fromByteCount: Int64(b))
-}
-
-private func formatRate(_ bps: UInt64) -> String {
-    "\(formatBytes(bps))/s"
-}
-
 extension View {
     @ViewBuilder
     func glassCard(enabled: Bool, cornerRadius: CGFloat) -> some View {
@@ -779,22 +600,11 @@ extension View {
     }
 }
 
-private func formatETA(remaining: UInt64, bps: UInt64) -> String {
-    guard bps > 0 else { return "—" }
-    let seconds = remaining / bps
-    if seconds < 60 { return "<1m" }
-    let minutes = seconds / 60
-    if minutes < 60 { return "\(minutes)m" }
-    let hours = minutes / 60
-    let mins = minutes % 60
-    if hours < 24 { return mins == 0 ? "\(hours)h" : "\(hours)h \(mins)m" }
-    let days = hours / 24
-    let hrs = hours % 24
-    return hrs == 0 ? "\(days)d" : "\(days)d \(hrs)h"
-}
-
 #Preview {
     ContentView()
         .environment(SessionHolder())
+        .environment(Preferences())
+        .environment(PosterStore())
+        .environment(TorrentStore())
         .frame(width: 760, height: 540)
 }
