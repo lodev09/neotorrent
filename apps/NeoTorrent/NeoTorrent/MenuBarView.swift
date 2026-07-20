@@ -43,8 +43,9 @@ struct MenuBarView: View {
         VStack(spacing: 0) {
             header
                 .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                .padding(.vertical, 12)
             Divider()
+                .padding(.horizontal, 14)
             if store.torrents.isEmpty {
                 emptyState
             } else {
@@ -63,7 +64,8 @@ struct MenuBarView: View {
                             )
                         }
                     }
-                    .padding(6)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
                     .onGeometryChange(for: CGFloat.self) { proxy in
                         proxy.size.height
                     } action: { height in
@@ -73,9 +75,10 @@ struct MenuBarView: View {
                 .frame(height: min(listHeight, 340))
             }
             Divider()
+                .padding(.horizontal, 14)
             footer
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
         }
         .frame(width: 380)
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
