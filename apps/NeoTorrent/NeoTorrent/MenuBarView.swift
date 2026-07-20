@@ -232,7 +232,7 @@ private struct MenuBarTorrentRow: View {
                     }
                     .buttonStyle(.plain)
                     .help(isPlaying ? "Stop VLC" : "Stream in VLC")
-                    .opacity((isHovered || isPlaying) ? 1 : 0)
+                    .opacity(isHovered ? 1 : 0)
                 }
                 Button {
                     if torrent.isFinished {
