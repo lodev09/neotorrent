@@ -9,12 +9,12 @@ struct MenuBarLabel: View {
     @MainActor private static let icon: NSImage = {
         let img = NSImage(named: "MenuBarIcon") ?? NSImage()
         img.isTemplate = true
-        img.size = NSSize(width: 17, height: 17)
+        img.size = NSSize(width: 15, height: 15)
         return img
     }()
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             Image(nsImage: Self.icon)
             if let progress = store.aggregateProgress {
                 Text("\(Int(progress * 100))%")
