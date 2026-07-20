@@ -27,8 +27,8 @@ targets:
       path: NeoTorrent/Info.plist
       properties:
         CFBundleDisplayName: NeoTorrent
-        CFBundleShortVersionString: "0.1.2"
-        CFBundleVersion: "3"
+        CFBundleShortVersionString: "0.1.3"
+        CFBundleVersion: "4"
         CFBundlePackageType: APPL
         LSApplicationCategoryType: public.app-category.utilities
         NSHumanReadableCopyright: "Copyright © 2026 Jovanni Lo"
