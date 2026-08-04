@@ -5,6 +5,8 @@ Native macOS torrent client. SwiftUI on top of a Rust core. Apple Silicon only.
 Built as a replacement for WebTorrent Desktop — no Electron, no Node, native
 everything.
 
+<img alt="NeoTorrent" src="preview.png" height="500" />
+
 ## Features
 
 - Add torrents via magnet URI, `.torrent` file, drag-and-drop, or paste
