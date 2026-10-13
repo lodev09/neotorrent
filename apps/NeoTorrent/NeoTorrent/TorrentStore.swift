@@ -7,7 +7,7 @@ extension TorrentSnapshot {
 }
 
 /// App-level torrent state. Owns the poll loop so progress, notifications,
-/// sounds, and the menu bar keep working while the main window is closed.
+/// and sounds keep working while the main window is closed.
 @MainActor
 @Observable
 final class TorrentStore {
@@ -26,19 +26,6 @@ final class TorrentStore {
     private var lastBadge = ""
 
     var downloading: [TorrentSnapshot] { torrents.filter { !$0.isFinished && !$0.isPaused } }
-    var seedingCount: Int { torrents.filter { $0.isFinished && !$0.isPaused }.count }
-    var pausedCount: Int { torrents.filter(\.isPaused).count }
-    var totalDownloadBps: UInt64 { torrents.reduce(0) { $0 + $1.downloadBps } }
-    var totalUploadBps: UInt64 { torrents.reduce(0) { $0 + $1.uploadBps } }
-
-    /// Aggregate progress across actively downloading torrents; nil when idle.
-    var aggregateProgress: Double? {
-        let active = downloading.filter { $0.totalBytes > 0 }
-        let total = active.reduce(UInt64(0)) { $0 + $1.totalBytes }
-        guard total > 0 else { return nil }
-        let done = active.reduce(UInt64(0)) { $0 + $1.downloadedBytes }
-        return min(1, Double(done) / Double(total))
-    }
 
     func start(sessionHolder: SessionHolder, prefs: Preferences, posters: PosterStore) {
         self.sessionHolder = sessionHolder

@@ -16,9 +16,6 @@ extension Notification.Name {
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         UNUserNotificationCenter.current().delegate = self
-        if !Preferences.storedShowDockIcon {
-            NSApp.setActivationPolicy(.accessory)
-        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -65,8 +62,6 @@ struct NeoTorrentApp: App {
     @State private var store = TorrentStore()
 
     var body: some Scene {
-        @Bindable var prefs = prefs
-
         Window("NeoTorrent", id: "main") {
             ContentView()
                 .environment(sessionHolder)
@@ -81,17 +76,6 @@ struct NeoTorrentApp: App {
         }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified)
-
-        MenuBarExtra(isInserted: $prefs.showMenuBarIcon) {
-            MenuBarView()
-                .environment(store)
-        } label: {
-            MenuBarLabel(store: store)
-                // Start the engine even when the main window never appears
-                // (e.g. menu-bar-only launch with the dock icon hidden).
-                .task { await sessionHolder.start(prefs: prefs, store: store, posters: posters) }
-        }
-        .menuBarExtraStyle(.window)
 
         Settings {
             SettingsView()
