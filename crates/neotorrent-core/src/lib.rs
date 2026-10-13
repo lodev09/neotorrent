@@ -1,12 +1,14 @@
+#[cfg(feature = "webrtc")]
 pub mod bencode;
+#[cfg(feature = "webrtc")]
 pub mod engine;
+#[cfg(feature = "webrtc")]
 pub mod extension;
 pub mod magnet;
+#[cfg(feature = "webrtc")]
 pub mod peer;
 pub mod session;
+#[cfg(feature = "webrtc")]
 pub mod tracker;
+#[cfg(feature = "webrtc")]
 pub mod wire;
-
-pub fn greet() -> String {
-    format!("Hello from neotorrent-core v{}", env!("CARGO_PKG_VERSION"))
-}

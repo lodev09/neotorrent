@@ -15,6 +15,12 @@ pub const OUR_UT_METADATA_ID: u8 = 1;
 /// 16 KiB per metadata piece (BEP 9).
 pub const METADATA_PIECE_SIZE: usize = 16384;
 
+/// Largest peer-advertised `metadata_size` we accept.
+pub const MAX_METADATA_SIZE: u64 = 10 * 1024 * 1024;
+
+/// Largest bencoded extension message dict (handshake, ut_metadata header) we parse.
+const MAX_MESSAGE_SIZE: usize = 64 * 1024;
+
 /// `ut_metadata` message types.
 pub const UT_METADATA_REQUEST: u8 = 0;
 pub const UT_METADATA_DATA: u8 = 1;
@@ -24,16 +30,41 @@ pub const UT_METADATA_REJECT: u8 = 2;
 pub enum ExtensionError {
     #[error("bencode: {0}")]
     Bencode(String),
+    #[error("bencode value malformed, too large or too deeply nested")]
+    BadBencode,
     #[error("malformed ut_metadata data: missing piece bytes")]
     BadUtMetadataData,
+    #[error("invalid metadata_size: {0}")]
+    BadMetadataSize(u64),
+    #[error("ut_metadata piece {piece} is {got} bytes, expected {expected}")]
+    BadPieceLength {
+        piece: u32,
+        got: usize,
+        expected: usize,
+    },
     #[error("info dict hash mismatch")]
     InfoHashMismatch,
+    #[error("unsafe path in info dict: {0:?}")]
+    UnsafePath(String),
 }
 
 impl From<serde_bencode::Error> for ExtensionError {
     fn from(e: serde_bencode::Error) -> Self {
         Self::Bencode(e.to_string())
     }
+}
+
+/// Parse peer-supplied bencode only after checking it is a single value within
+/// `max_len` bytes and [bencode::MAX_DEPTH] nesting, so serde_bencode can't be
+/// driven into deep recursion.
+fn decode_bounded<'de, T: Deserialize<'de>>(
+    bytes: &'de [u8],
+    max_len: usize,
+) -> Result<T, ExtensionError> {
+    if bytes.len() > max_len || bencode::value_end(bytes) != Some(bytes.len()) {
+        return Err(ExtensionError::BadBencode);
+    }
+    Ok(serde_bencode::from_bytes(bytes)?)
 }
 
 // -- Extended handshake (BEP 10, ext_id = 0) ------------------------------
@@ -68,12 +99,12 @@ impl ExtendedHandshake {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, ExtensionError> {
-        Ok(serde_bencode::from_bytes(bytes)?)
+        decode_bounded(bytes, MAX_MESSAGE_SIZE)
     }
 
-    /// The peer's ID for ut_metadata, if they support it.
+    /// The peer's ID for ut_metadata, if they support it (BEP 10: 0 = disabled).
     pub fn ut_metadata_id(&self) -> Option<u8> {
-        self.m.get("ut_metadata").copied()
+        self.m.get("ut_metadata").copied().filter(|&id| id != 0)
     }
 }
 
@@ -89,23 +120,43 @@ struct UtMetadataHeader {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UtMetadataMessage {
-    Request { piece: u32 },
-    Data { piece: u32, total_size: u64, data: Vec<u8> },
-    Reject { piece: u32 },
+    Request {
+        piece: u32,
+    },
+    Data {
+        piece: u32,
+        total_size: u64,
+        data: Vec<u8>,
+    },
+    Reject {
+        piece: u32,
+    },
 }
 
 impl UtMetadataMessage {
     pub fn encode(&self) -> Result<Vec<u8>, ExtensionError> {
         match self {
             Self::Request { piece } => {
-                let h = UtMetadataHeader { msg_type: UT_METADATA_REQUEST, piece: *piece, total_size: None };
+                let h = UtMetadataHeader {
+                    msg_type: UT_METADATA_REQUEST,
+                    piece: *piece,
+                    total_size: None,
+                };
                 Ok(serde_bencode::to_bytes(&h)?)
             }
             Self::Reject { piece } => {
-                let h = UtMetadataHeader { msg_type: UT_METADATA_REJECT, piece: *piece, total_size: None };
+                let h = UtMetadataHeader {
+                    msg_type: UT_METADATA_REJECT,
+                    piece: *piece,
+                    total_size: None,
+                };
                 Ok(serde_bencode::to_bytes(&h)?)
             }
-            Self::Data { piece, total_size, data } => {
+            Self::Data {
+                piece,
+                total_size,
+                data,
+            } => {
                 let h = UtMetadataHeader {
                     msg_type: UT_METADATA_DATA,
                     piece: *piece,
@@ -120,7 +171,7 @@ impl UtMetadataMessage {
 
     pub fn decode(bytes: &[u8]) -> Result<Self, ExtensionError> {
         let end = bencode::value_end(bytes).ok_or(ExtensionError::BadUtMetadataData)?;
-        let h: UtMetadataHeader = serde_bencode::from_bytes(&bytes[..end])?;
+        let h: UtMetadataHeader = decode_bounded(&bytes[..end], MAX_MESSAGE_SIZE)?;
         match h.msg_type {
             UT_METADATA_REQUEST => Ok(Self::Request { piece: h.piece }),
             UT_METADATA_REJECT => Ok(Self::Reject { piece: h.piece }),
@@ -129,7 +180,10 @@ impl UtMetadataMessage {
                 total_size: h.total_size.unwrap_or(0),
                 data: bytes[end..].to_vec(),
             }),
-            _ => Err(ExtensionError::Bencode(format!("unknown msg_type {}", h.msg_type))),
+            _ => Err(ExtensionError::Bencode(format!(
+                "unknown msg_type {}",
+                h.msg_type
+            ))),
         }
     }
 }
@@ -145,17 +199,24 @@ pub struct MetadataAssembler {
 }
 
 impl MetadataAssembler {
-    pub fn new(total_size: u64, info_hash: InfoHash) -> Self {
-        let n = ((total_size as usize) + METADATA_PIECE_SIZE - 1) / METADATA_PIECE_SIZE;
-        Self {
-            pieces: vec![None; n],
-            total_size: total_size as usize,
-            info_hash,
+    pub fn new(total_size: u64, info_hash: InfoHash) -> Result<Self, ExtensionError> {
+        if total_size == 0 || total_size > MAX_METADATA_SIZE {
+            return Err(ExtensionError::BadMetadataSize(total_size));
         }
+        let total_size = total_size as usize;
+        Ok(Self {
+            pieces: vec![None; total_size.div_ceil(METADATA_PIECE_SIZE)],
+            total_size,
+            info_hash,
+        })
     }
 
     pub fn num_pieces(&self) -> usize {
         self.pieces.len()
+    }
+
+    pub fn total_size(&self) -> u64 {
+        self.total_size as u64
     }
 
     pub fn missing_pieces(&self) -> impl Iterator<Item = u32> + '_ {
@@ -171,6 +232,14 @@ impl MetadataAssembler {
         let idx = piece as usize;
         if idx >= self.pieces.len() {
             return Ok(None);
+        }
+        let expected = METADATA_PIECE_SIZE.min(self.total_size - idx * METADATA_PIECE_SIZE);
+        if data.len() != expected {
+            return Err(ExtensionError::BadPieceLength {
+                piece,
+                got: data.len(),
+                expected,
+            });
         }
         self.pieces[idx] = Some(data);
         if self.pieces.iter().any(Option::is_none) {
@@ -214,8 +283,24 @@ pub struct InfoDict {
 }
 
 impl InfoDict {
+    /// Parses and rejects any `name` / file `path` that could escape the
+    /// download directory, so callers can join them onto a base dir as-is.
     pub fn parse(bytes: &[u8]) -> Result<Self, ExtensionError> {
-        Ok(serde_bencode::from_bytes(bytes)?)
+        let info: Self = decode_bounded(bytes, MAX_METADATA_SIZE as usize)?;
+        info.validate_paths()?;
+        Ok(info)
+    }
+
+    fn validate_paths(&self) -> Result<(), ExtensionError> {
+        if !is_safe_path_component(&self.name) {
+            return Err(ExtensionError::UnsafePath(self.name.clone()));
+        }
+        for f in self.files.iter().flatten() {
+            if f.path.is_empty() || !f.path.iter().all(|c| is_safe_path_component(c)) {
+                return Err(ExtensionError::UnsafePath(f.path.join("/")));
+            }
+        }
+        Ok(())
     }
 
     pub fn piece_hashes(&self) -> impl Iterator<Item = &[u8]> {
@@ -239,6 +324,12 @@ impl InfoDict {
     pub fn is_multi_file(&self) -> bool {
         self.files.is_some()
     }
+}
+
+/// A single relative path component: not empty, `.`, `..`, and no separators
+/// (which also rules out absolute paths).
+pub fn is_safe_path_component(c: &str) -> bool {
+    !matches!(c, "" | "." | "..") && !c.contains(['/', '\\'])
 }
 
 #[cfg(test)]
@@ -298,7 +389,7 @@ mod tests {
         h.update(info);
         let info_hash: [u8; 20] = h.finalize().into();
 
-        let mut asm = MetadataAssembler::new(info.len() as u64, info_hash);
+        let mut asm = MetadataAssembler::new(info.len() as u64, info_hash).unwrap();
         assert_eq!(asm.num_pieces(), 1);
         let done = asm.record(0, info.to_vec()).unwrap().unwrap();
         assert_eq!(&done, info);
@@ -308,7 +399,7 @@ mod tests {
     fn metadata_assembler_rejects_bad_hash() {
         let info = b"d4:name4:test12:piece lengthi16384e6:pieces20:01234567890123456789e";
         let wrong_hash = [0u8; 20];
-        let mut asm = MetadataAssembler::new(info.len() as u64, wrong_hash);
+        let mut asm = MetadataAssembler::new(info.len() as u64, wrong_hash).unwrap();
         assert!(matches!(
             asm.record(0, info.to_vec()),
             Err(ExtensionError::InfoHashMismatch)
@@ -331,7 +422,7 @@ mod tests {
         h.update(&info);
         let info_hash: [u8; 20] = h.finalize().into();
 
-        let mut asm = MetadataAssembler::new(info.len() as u64, info_hash);
+        let mut asm = MetadataAssembler::new(info.len() as u64, info_hash).unwrap();
         assert_eq!(asm.num_pieces(), 2);
         let missing: Vec<u32> = asm.missing_pieces().collect();
         assert_eq!(missing, vec![0, 1]);
@@ -345,7 +436,8 @@ mod tests {
 
     #[test]
     fn info_dict_parses_single_file() {
-        let bytes = b"d6:lengthi100e4:name8:file.txt12:piece lengthi16384e6:pieces20:01234567890123456789e";
+        let bytes =
+            b"d6:lengthi100e4:name8:file.txt12:piece lengthi16384e6:pieces20:01234567890123456789e";
         let info = InfoDict::parse(bytes).unwrap();
         assert_eq!(info.name, "file.txt");
         assert_eq!(info.piece_length, 16384);
@@ -365,5 +457,131 @@ mod tests {
         assert_eq!(files.len(), 2);
         assert_eq!(files[0].path, vec!["a", "f.txt"]);
         assert_eq!(files[1].path, vec!["b", "g.txt"]);
+    }
+
+    #[test]
+    fn extended_handshake_zero_id_means_disabled() {
+        let dec = ExtendedHandshake::decode(b"d1:md11:ut_metadatai0eee").unwrap();
+        assert_eq!(dec.ut_metadata_id(), None);
+    }
+
+    #[test]
+    fn extended_handshake_rejects_deep_nesting() {
+        let mut enc = b"d1:x".to_vec();
+        enc.extend(std::iter::repeat_n(b'l', 10_000));
+        enc.extend(std::iter::repeat_n(b'e', 10_000));
+        enc.push(b'e');
+        assert!(matches!(
+            ExtendedHandshake::decode(&enc),
+            Err(ExtensionError::BadBencode)
+        ));
+    }
+
+    #[test]
+    fn extended_handshake_rejects_oversized() {
+        let pad = "x".repeat(MAX_MESSAGE_SIZE);
+        let enc = format!("d1:x{}:{pad}e", pad.len());
+        assert!(matches!(
+            ExtendedHandshake::decode(enc.as_bytes()),
+            Err(ExtensionError::BadBencode)
+        ));
+    }
+
+    #[test]
+    fn ut_metadata_rejects_deep_header() {
+        let mut enc = b"d1:x".to_vec();
+        enc.extend(std::iter::repeat_n(b'l', 10_000));
+        enc.extend(std::iter::repeat_n(b'e', 10_000));
+        enc.push(b'e');
+        assert!(UtMetadataMessage::decode(&enc).is_err());
+    }
+
+    #[test]
+    fn metadata_assembler_rejects_bad_size() {
+        assert!(matches!(
+            MetadataAssembler::new(0, [0; 20]),
+            Err(ExtensionError::BadMetadataSize(0))
+        ));
+        assert!(matches!(
+            MetadataAssembler::new(MAX_METADATA_SIZE + 1, [0; 20]),
+            Err(ExtensionError::BadMetadataSize(_))
+        ));
+        assert!(MetadataAssembler::new(MAX_METADATA_SIZE, [0; 20]).is_ok());
+    }
+
+    #[test]
+    fn metadata_assembler_rejects_bad_piece_length() {
+        let mut asm = MetadataAssembler::new(20_000, [0; 20]).unwrap();
+        assert!(matches!(
+            asm.record(0, vec![0; 100]),
+            Err(ExtensionError::BadPieceLength {
+                piece: 0,
+                got: 100,
+                expected: METADATA_PIECE_SIZE
+            })
+        ));
+        assert!(matches!(
+            asm.record(1, vec![0; METADATA_PIECE_SIZE]),
+            Err(ExtensionError::BadPieceLength {
+                piece: 1,
+                expected: 3616,
+                ..
+            })
+        ));
+        assert!(asm.record(1, vec![0; 3616]).unwrap().is_none());
+        assert_eq!(asm.missing_pieces().collect::<Vec<_>>(), vec![0]);
+    }
+
+    fn multi_file_info(name: &str, path: &[&str]) -> Vec<u8> {
+        let mut b = b"d5:filesld6:lengthi1e4:pathl".to_vec();
+        for c in path {
+            b.extend(format!("{}:{c}", c.len()).bytes());
+        }
+        b.extend(
+            format!(
+                "eee4:name{}:{name}12:piece lengthi16384e6:pieces20:01234567890123456789e",
+                name.len()
+            )
+            .bytes(),
+        );
+        b
+    }
+
+    #[test]
+    fn info_dict_accepts_safe_paths() {
+        assert!(InfoDict::parse(&multi_file_info("dir", &["a", "b.txt"])).is_ok());
+        assert!(InfoDict::parse(&multi_file_info("dir", &["..a", "b..txt"])).is_ok());
+    }
+
+    #[test]
+    fn info_dict_rejects_unsafe_paths() {
+        let paths: [&[&str]; 8] = [
+            &[],
+            &[""],
+            &["."],
+            &[".."],
+            &["a", "..", "b"],
+            &["/etc", "passwd"],
+            &["a/b"],
+            &["a\\b"],
+        ];
+        for path in paths {
+            assert!(
+                matches!(
+                    InfoDict::parse(&multi_file_info("dir", path)),
+                    Err(ExtensionError::UnsafePath(_))
+                ),
+                "{path:?}"
+            );
+        }
+        for name in ["", ".", "..", "/abs", "a/b"] {
+            assert!(
+                matches!(
+                    InfoDict::parse(&multi_file_info(name, &["f"])),
+                    Err(ExtensionError::UnsafePath(_))
+                ),
+                "{name:?}"
+            );
+        }
     }
 }

@@ -5,20 +5,34 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[features]
+webrtc = [
+    "dep:tokio-tungstenite",
+    "dep:webrtc",
+    "dep:bytes",
+    "dep:serde_bencode",
+    "dep:serde_bytes",
+    "dep:sha1",
+    "dep:futures-util",
+    "dep:rand",
+]
+
 [dependencies]
 tokio.workspace = true
-tokio-tungstenite.workspace = true
-webrtc.workspace = true
-bytes.workspace = true
-serde_bencode.workspace = true
-serde_bytes.workspace = true
-sha1.workspace = true
+tokio-tungstenite = { workspace = true, optional = true }
+webrtc = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
+serde_bencode = { workspace = true, optional = true }
+serde_bytes = { workspace = true, optional = true }
+sha1 = { workspace = true, optional = true }
 librqbit.workspace = true
 anyhow.workspace = true
-futures-util.workspace = true
+futures-util = { workspace = true, optional = true }
+# Non-optional: librqbit needs serde's `rc` feature but doesn't enable it itself.
 serde.workspace = true
 serde_json.workspace = true
 url.workspace = true
-rand.workspace = true
+rand = { workspace = true, optional = true }
 thiserror.workspace = true
+tracing.workspace = true
 form_urlencoded.workspace = true

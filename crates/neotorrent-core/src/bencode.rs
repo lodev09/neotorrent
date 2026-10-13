@@ -3,20 +3,28 @@
 //! `ut_metadata` data messages contain a bencoded dict followed by raw bytes,
 //! so we need to find where the dict ends ourselves.
 
+/// Maximum list/dict nesting accepted from peers.
+pub const MAX_DEPTH: usize = 64;
+
 /// Length of the bencoded value starting at `buf[0]`, or `None` if `buf`
-/// doesn't begin with a complete bencoded value.
+/// doesn't begin with a complete bencoded value nested at most [MAX_DEPTH] deep.
 pub fn value_end(buf: &[u8]) -> Option<usize> {
     let mut i = 0;
-    skip_value(buf, &mut i).then_some(i)
+    skip_value(buf, &mut i, 0).then_some(i)
 }
 
-fn skip_value(buf: &[u8], i: &mut usize) -> bool {
-    let Some(&first) = buf.get(*i) else { return false };
+fn skip_value(buf: &[u8], i: &mut usize, depth: usize) -> bool {
+    let Some(&first) = buf.get(*i) else {
+        return false;
+    };
     match first {
         b'd' | b'l' => {
+            if depth >= MAX_DEPTH {
+                return false;
+            }
             *i += 1;
             while buf.get(*i) != Some(&b'e') {
-                if !skip_value(buf, i) {
+                if !skip_value(buf, i, depth + 1) {
                     return false;
                 }
             }
@@ -40,14 +48,20 @@ fn skip_value(buf: &[u8], i: &mut usize) -> bool {
                 if !d.is_ascii_digit() {
                     break;
                 }
-                len = len * 10 + (d - b'0') as usize;
+                let Some(next) = len
+                    .checked_mul(10)
+                    .and_then(|l| l.checked_add((d - b'0') as usize))
+                else {
+                    return false;
+                };
+                len = next;
                 *i += 1;
             }
             if buf.get(*i) != Some(&b':') {
                 return false;
             }
             *i += 1;
-            if *i + len > buf.len() {
+            if len > buf.len() - *i {
                 return false;
             }
             *i += len;
@@ -98,5 +112,20 @@ mod tests {
         assert_eq!(value_end(b"d3:foo"), None);
         assert_eq!(value_end(b"i42"), None);
         assert_eq!(value_end(b"5:hel"), None);
+    }
+
+    #[test]
+    fn rejects_overflowing_length() {
+        assert_eq!(value_end(b"d18446744073709551595:"), None);
+        assert_eq!(value_end(b"99999999999999999999999:x"), None);
+    }
+
+    #[test]
+    fn limits_nesting_depth() {
+        let ok = [vec![b'l'; MAX_DEPTH], vec![b'e'; MAX_DEPTH]].concat();
+        assert_eq!(value_end(&ok), Some(ok.len()));
+        let deep = [vec![b'l'; MAX_DEPTH + 1], vec![b'e'; MAX_DEPTH + 1]].concat();
+        assert_eq!(value_end(&deep), None);
+        assert_eq!(value_end(&vec![b'l'; 1_000_000]), None);
     }
 }

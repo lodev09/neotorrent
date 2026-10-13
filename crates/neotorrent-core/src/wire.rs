@@ -14,6 +14,10 @@ use crate::tracker::PeerId;
 pub const PROTOCOL: &[u8; 19] = b"BitTorrent protocol";
 pub const HANDSHAKE_LEN: usize = 1 + 19 + 8 + 20 + 20; // 68 bytes
 
+/// Largest frame we accept from a peer (well above a 16 KiB block or any
+/// realistic bitfield).
+pub const MAX_FRAME_LEN: usize = 2 * 1024 * 1024;
+
 const MSG_CHOKE: u8 = 0;
 const MSG_UNCHOKE: u8 = 1;
 const MSG_INTERESTED: u8 = 2;
@@ -34,6 +38,8 @@ pub enum WireError {
     BadMsgId(u8),
     #[error("payload too small for {0}")]
     BadPayload(&'static str),
+    #[error("frame of {0} bytes exceeds limit")]
+    FrameTooLarge(usize),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -79,7 +85,11 @@ impl Handshake {
         info_hash.copy_from_slice(&buf[28..48]);
         let mut peer_id = [0u8; 20];
         peer_id.copy_from_slice(&buf[48..68]);
-        Ok(Self { reserved: Reserved(reserved), info_hash, peer_id })
+        Ok(Self {
+            reserved: Reserved(reserved),
+            info_hash,
+            peer_id,
+        })
     }
 }
 
@@ -92,25 +102,54 @@ pub enum Message {
     NotInterested,
     Have(u32),
     Bitfield(Vec<u8>),
-    Request { index: u32, begin: u32, length: u32 },
-    Piece { index: u32, begin: u32, block: Vec<u8> },
-    Cancel { index: u32, begin: u32, length: u32 },
+    Request {
+        index: u32,
+        begin: u32,
+        length: u32,
+    },
+    Piece {
+        index: u32,
+        begin: u32,
+        block: Vec<u8>,
+    },
+    Cancel {
+        index: u32,
+        begin: u32,
+        length: u32,
+    },
     Port(u16),
     /// BEP 10 extended message. `ext_id == 0` is the extended handshake;
     /// otherwise it's the ID we advertised for the named extension.
-    Extended { ext_id: u8, payload: Vec<u8> },
+    Extended {
+        ext_id: u8,
+        payload: Vec<u8>,
+    },
 }
 
 impl Message {
     pub fn encode(&self, out: &mut Vec<u8>) {
-        fn push_u32(o: &mut Vec<u8>, v: u32) { o.extend_from_slice(&v.to_be_bytes()); }
+        fn push_u32(o: &mut Vec<u8>, v: u32) {
+            o.extend_from_slice(&v.to_be_bytes());
+        }
 
         match self {
             Message::KeepAlive => push_u32(out, 0),
-            Message::Choke => { push_u32(out, 1); out.push(MSG_CHOKE); }
-            Message::Unchoke => { push_u32(out, 1); out.push(MSG_UNCHOKE); }
-            Message::Interested => { push_u32(out, 1); out.push(MSG_INTERESTED); }
-            Message::NotInterested => { push_u32(out, 1); out.push(MSG_NOT_INTERESTED); }
+            Message::Choke => {
+                push_u32(out, 1);
+                out.push(MSG_CHOKE);
+            }
+            Message::Unchoke => {
+                push_u32(out, 1);
+                out.push(MSG_UNCHOKE);
+            }
+            Message::Interested => {
+                push_u32(out, 1);
+                out.push(MSG_INTERESTED);
+            }
+            Message::NotInterested => {
+                push_u32(out, 1);
+                out.push(MSG_NOT_INTERESTED);
+            }
             Message::Have(p) => {
                 push_u32(out, 5);
                 out.push(MSG_HAVE);
@@ -121,21 +160,33 @@ impl Message {
                 out.push(MSG_BITFIELD);
                 out.extend_from_slice(b);
             }
-            Message::Request { index, begin, length } => {
+            Message::Request {
+                index,
+                begin,
+                length,
+            } => {
                 push_u32(out, 13);
                 out.push(MSG_REQUEST);
                 push_u32(out, *index);
                 push_u32(out, *begin);
                 push_u32(out, *length);
             }
-            Message::Piece { index, begin, block } => {
+            Message::Piece {
+                index,
+                begin,
+                block,
+            } => {
                 push_u32(out, 9 + block.len() as u32);
                 out.push(MSG_PIECE);
                 push_u32(out, *index);
                 push_u32(out, *begin);
                 out.extend_from_slice(block);
             }
-            Message::Cancel { index, begin, length } => {
+            Message::Cancel {
+                index,
+                begin,
+                length,
+            } => {
                 push_u32(out, 13);
                 out.push(MSG_CANCEL);
                 push_u32(out, *index);
@@ -175,24 +226,39 @@ impl Message {
             }
             MSG_BITFIELD => Ok(Message::Bitfield(p.to_vec())),
             MSG_REQUEST => decode_triple(p, "request").map(|(i, b, l)| Message::Request {
-                index: i, begin: b, length: l,
+                index: i,
+                begin: b,
+                length: l,
             }),
             MSG_PIECE => {
-                if p.len() < 8 { return Err(WireError::BadPayload("piece")); }
+                if p.len() < 8 {
+                    return Err(WireError::BadPayload("piece"));
+                }
                 let index = u32::from_be_bytes(p[..4].try_into().unwrap());
                 let begin = u32::from_be_bytes(p[4..8].try_into().unwrap());
-                Ok(Message::Piece { index, begin, block: p[8..].to_vec() })
+                Ok(Message::Piece {
+                    index,
+                    begin,
+                    block: p[8..].to_vec(),
+                })
             }
             MSG_CANCEL => decode_triple(p, "cancel").map(|(i, b, l)| Message::Cancel {
-                index: i, begin: b, length: l,
+                index: i,
+                begin: b,
+                length: l,
             }),
             MSG_PORT => {
                 let p = p.get(..2).ok_or(WireError::BadPayload("port"))?;
                 Ok(Message::Port(u16::from_be_bytes(p.try_into().unwrap())))
             }
             MSG_EXTENDED => {
-                if p.is_empty() { return Err(WireError::BadPayload("extended")); }
-                Ok(Message::Extended { ext_id: p[0], payload: p[1..].to_vec() })
+                if p.is_empty() {
+                    return Err(WireError::BadPayload("extended"));
+                }
+                Ok(Message::Extended {
+                    ext_id: p[0],
+                    payload: p[1..].to_vec(),
+                })
             }
             other => Err(WireError::BadMsgId(other)),
         }
@@ -222,17 +288,26 @@ impl MessageDecoder {
     }
 
     /// Pop a complete frame if one is available. `Ok(None)` means "need more bytes".
+    /// Frames with unknown message IDs are skipped.
     pub fn pop(&mut self) -> Result<Option<Message>, WireError> {
-        if self.buf.len() < 4 {
-            return Ok(None);
+        loop {
+            if self.buf.len() < 4 {
+                return Ok(None);
+            }
+            let len = u32::from_be_bytes(self.buf[..4].try_into().unwrap()) as usize;
+            if len > MAX_FRAME_LEN {
+                return Err(WireError::FrameTooLarge(len));
+            }
+            if self.buf.len() < 4 + len {
+                return Ok(None);
+            }
+            self.buf.advance(4);
+            let frame = self.buf.split_to(len);
+            match Message::decode(&frame) {
+                Err(WireError::BadMsgId(_)) => continue,
+                other => return other.map(Some),
+            }
         }
-        let len = u32::from_be_bytes(self.buf[..4].try_into().unwrap()) as usize;
-        if self.buf.len() < 4 + len {
-            return Ok(None);
-        }
-        self.buf.advance(4);
-        let frame = self.buf.split_to(len);
-        Ok(Some(Message::decode(&frame)?))
     }
 }
 
@@ -283,11 +358,26 @@ mod tests {
         rt(Message::NotInterested);
         rt(Message::Have(42));
         rt(Message::Bitfield(vec![0xFF, 0xAA, 0x55]));
-        rt(Message::Request { index: 1, begin: 0, length: 16384 });
-        rt(Message::Piece { index: 1, begin: 0, block: vec![0x99; 100] });
-        rt(Message::Cancel { index: 1, begin: 0, length: 16384 });
+        rt(Message::Request {
+            index: 1,
+            begin: 0,
+            length: 16384,
+        });
+        rt(Message::Piece {
+            index: 1,
+            begin: 0,
+            block: vec![0x99; 100],
+        });
+        rt(Message::Cancel {
+            index: 1,
+            begin: 0,
+            length: 16384,
+        });
         rt(Message::Port(6881));
-        rt(Message::Extended { ext_id: 3, payload: vec![1, 2, 3, 4] });
+        rt(Message::Extended {
+            ext_id: 3,
+            payload: vec![1, 2, 3, 4],
+        });
     }
 
     #[test]
@@ -321,18 +411,49 @@ mod tests {
         while let Some(m) = dec.pop().unwrap() {
             got.push(m);
         }
-        assert_eq!(got, vec![Message::Have(1), Message::Have(2), Message::Have(3)]);
+        assert_eq!(
+            got,
+            vec![Message::Have(1), Message::Have(2), Message::Have(3)]
+        );
     }
 
     #[test]
     fn decoder_holds_partial_frame() {
         let mut all = Vec::new();
-        Message::Piece { index: 0, begin: 0, block: vec![0x55; 100] }.encode(&mut all);
+        Message::Piece {
+            index: 0,
+            begin: 0,
+            block: vec![0x55; 100],
+        }
+        .encode(&mut all);
         let mut dec = MessageDecoder::default();
         // Feed everything except the last byte.
         dec.push(&all[..all.len() - 1]);
         assert!(dec.pop().unwrap().is_none());
         dec.push(&all[all.len() - 1..]);
         assert!(matches!(dec.pop().unwrap(), Some(Message::Piece { .. })));
+    }
+
+    #[test]
+    fn decoder_rejects_oversized_frame_from_header() {
+        let mut dec = MessageDecoder::default();
+        dec.push(&((MAX_FRAME_LEN + 1) as u32).to_be_bytes());
+        assert!(matches!(dec.pop(), Err(WireError::FrameTooLarge(n)) if n == MAX_FRAME_LEN + 1));
+
+        let mut dec = MessageDecoder::default();
+        dec.push(&u32::MAX.to_be_bytes());
+        assert!(matches!(dec.pop(), Err(WireError::FrameTooLarge(_))));
+    }
+
+    #[test]
+    fn decoder_skips_unknown_message_ids() {
+        let mut all = vec![0, 0, 0, 1, 0x0E]; // BEP 6 have_all
+        all.extend_from_slice(&[0, 0, 0, 3, 0xFF, 0xAA, 0xBB]);
+        Message::Have(9).encode(&mut all);
+
+        let mut dec = MessageDecoder::default();
+        dec.push(&all);
+        assert_eq!(dec.pop().unwrap(), Some(Message::Have(9)));
+        assert_eq!(dec.pop().unwrap(), None);
     }
 }

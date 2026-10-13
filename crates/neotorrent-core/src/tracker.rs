@@ -91,7 +91,9 @@ pub struct AnnounceParams {
     pub peer_id: PeerId,
     pub uploaded: u64,
     pub downloaded: u64,
-    pub left: u64,
+    /// `None` = unknown (no metadata yet). bittorrent-tracker treats a missing
+    /// `left` as Infinity (leecher); `0` would register us as a seeder.
+    pub left: Option<u64>,
     pub event: AnnounceEvent,
     pub offers: Vec<OutgoingOffer>,
     pub numwant: u32,
@@ -128,10 +130,12 @@ struct AnnounceWire {
     peer_id: [u8; 20],
     uploaded: u64,
     downloaded: u64,
-    left: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    left: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     event: Option<&'static str>,
     numwant: u32,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     offers: Vec<OfferWire>,
 }
 
@@ -186,12 +190,20 @@ fn parse_event(msg: &str) -> Option<TrackerEvent> {
     if let Some(sdp) = sm.offer {
         let peer_id = sm.peer_id.as_deref().and_then(decode_binary_20)?;
         let offer_id = sm.offer_id.as_deref().and_then(decode_binary_20)?;
-        return Some(TrackerEvent::PeerOffer { peer_id, offer_id, sdp: sdp.sdp });
+        return Some(TrackerEvent::PeerOffer {
+            peer_id,
+            offer_id,
+            sdp: sdp.sdp,
+        });
     }
     if let Some(sdp) = sm.answer {
         let peer_id = sm.peer_id.as_deref().and_then(decode_binary_20)?;
         let offer_id = sm.offer_id.as_deref().and_then(decode_binary_20)?;
-        return Some(TrackerEvent::PeerAnswer { peer_id, offer_id, sdp: sdp.sdp });
+        return Some(TrackerEvent::PeerAnswer {
+            peer_id,
+            offer_id,
+            sdp: sdp.sdp,
+        });
     }
     if sm.complete.is_some() || sm.incomplete.is_some() || sm.interval.is_some() {
         return Some(TrackerEvent::Stats {
@@ -252,9 +264,7 @@ pub struct TrackerClient {
 }
 
 impl TrackerClient {
-    pub async fn connect(
-        url: &str,
-    ) -> Result<(Self, mpsc::Receiver<TrackerEvent>), TrackerError> {
+    pub async fn connect(url: &str) -> Result<(Self, mpsc::Receiver<TrackerEvent>), TrackerError> {
         let url = url::Url::parse(url).map_err(|e| TrackerError::Url(e.to_string()))?;
         let (ws, _) = connect_async(url.as_str()).await?;
         let (mut sink, mut stream) = ws.split();
@@ -302,7 +312,7 @@ impl TrackerClient {
                             }
                         };
                         let Some(text) = text else { continue };
-                        if sink.send(Message::Text(text.into())).await.is_err() {
+                        if sink.send(Message::Text(text)).await.is_err() {
                             break;
                         }
                     }
@@ -357,7 +367,7 @@ impl TrackerClient {
             .map_err(|_| TrackerError::Closed)
     }
 
-    pub async fn shutdown(self) {
+    pub async fn shutdown(&self) {
         let _ = self.cmd_tx.send(Cmd::Shutdown).await;
     }
 }
@@ -382,7 +392,7 @@ mod tests {
             peer_id,
             uploaded: 0,
             downloaded: 0,
-            left: 1024,
+            left: Some(1024),
             event: Some("started"),
             numwant: 50,
             offers: vec![OfferWire {
@@ -398,13 +408,39 @@ mod tests {
         assert_eq!(v["action"], "announce");
         assert_eq!(v["event"], "started");
         assert_eq!(v["numwant"], 50);
-        assert_eq!(decode_binary_20(v["info_hash"].as_str().unwrap()).unwrap(), INFO_HASH);
-        assert_eq!(decode_binary_20(v["peer_id"].as_str().unwrap()).unwrap(), peer_id);
+        assert_eq!(
+            decode_binary_20(v["info_hash"].as_str().unwrap()).unwrap(),
+            INFO_HASH
+        );
+        assert_eq!(
+            decode_binary_20(v["peer_id"].as_str().unwrap()).unwrap(),
+            peer_id
+        );
         assert_eq!(
             decode_binary_20(v["offers"][0]["offer_id"].as_str().unwrap()).unwrap(),
             offer_id
         );
         assert_eq!(v["offers"][0]["offer"]["type"], "offer");
+        assert_eq!(v["left"], 1024);
+    }
+
+    #[test]
+    fn stopped_announce_omits_unknown_left_and_offers() {
+        let wire = AnnounceWire {
+            action: "announce",
+            info_hash: INFO_HASH,
+            peer_id: [0u8; 20],
+            uploaded: 0,
+            downloaded: 0,
+            left: None,
+            event: AnnounceEvent::Stopped.as_str(),
+            numwant: 0,
+            offers: Vec::new(),
+        };
+        let v: serde_json::Value = serde_json::to_value(&wire).unwrap();
+        assert_eq!(v["event"], "stopped");
+        assert!(v.get("left").is_none());
+        assert!(v.get("offers").is_none());
     }
 
     #[test]
@@ -444,7 +480,11 @@ mod tests {
         })
         .to_string();
         match parse_event(&msg).unwrap() {
-            TrackerEvent::PeerOffer { peer_id, offer_id, sdp } => {
+            TrackerEvent::PeerOffer {
+                peer_id,
+                offer_id,
+                sdp,
+            } => {
                 assert_eq!(peer_id, other);
                 assert_eq!(offer_id, oid);
                 assert_eq!(sdp, "v=0\r\n");
@@ -466,7 +506,11 @@ mod tests {
         })
         .to_string();
         match parse_event(&msg).unwrap() {
-            TrackerEvent::PeerAnswer { peer_id, offer_id, sdp } => {
+            TrackerEvent::PeerAnswer {
+                peer_id,
+                offer_id,
+                sdp,
+            } => {
                 assert_eq!(peer_id, other);
                 assert_eq!(offer_id, oid);
                 assert_eq!(sdp, "v=0\r\nm=app\r\n");
@@ -494,7 +538,7 @@ mod tests {
                 peer_id: generate_peer_id(),
                 uploaded: 0,
                 downloaded: 0,
-                left: 0,
+                left: None,
                 event: AnnounceEvent::Started,
                 offers: vec![OutgoingOffer {
                     offer_id: generate_offer_id(),

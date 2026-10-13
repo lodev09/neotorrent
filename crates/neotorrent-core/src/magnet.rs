@@ -5,6 +5,14 @@ use thiserror::Error;
 
 pub type InfoHash = [u8; 20];
 
+/// Default WebSocket trackers WebTorrent JS uses. We always announce to these
+/// in addition to whatever's in the magnet so peer discovery actually works
+/// for magnets that ship with one (or zero) WS trackers.
+pub const DEFAULT_WS_TRACKERS: &[&str] = &[
+    "wss://tracker.openwebtorrent.com",
+    "wss://tracker.btorrent.xyz",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MagnetLink {
     pub info_hash: InfoHash,
@@ -70,13 +78,11 @@ impl fmt::Display for MagnetLink {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "magnet:?xt=urn:btih:{}", hex(&self.info_hash))?;
         if let Some(name) = &self.display_name {
-            let encoded: String =
-                form_urlencoded::byte_serialize(name.as_bytes()).collect();
+            let encoded: String = form_urlencoded::byte_serialize(name.as_bytes()).collect();
             write!(f, "&dn={encoded}")?;
         }
         for tr in &self.trackers {
-            let encoded: String =
-                form_urlencoded::byte_serialize(tr.as_bytes()).collect();
+            let encoded: String = form_urlencoded::byte_serialize(tr.as_bytes()).collect();
             write!(f, "&tr={encoded}")?;
         }
         Ok(())
@@ -94,6 +100,9 @@ fn decode_info_hash(s: &str) -> Result<InfoHash, MagnetError> {
 }
 
 fn decode_hex(s: &str) -> Result<InfoHash, MagnetError> {
+    if !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(MagnetError::InvalidInfoHash(s.to_string()));
+    }
     let mut out = [0u8; 20];
     for (i, byte) in out.iter_mut().enumerate() {
         *byte = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16)
@@ -153,7 +162,10 @@ mod tests {
     #[test]
     fn parses_sintel() {
         let m = MagnetLink::parse(SINTEL).unwrap();
-        assert_eq!(hex(&m.info_hash), "08ada5a7a6183aae1e09d831df6748d566095a10");
+        assert_eq!(
+            hex(&m.info_hash),
+            "08ada5a7a6183aae1e09d831df6748d566095a10"
+        );
         assert_eq!(m.display_name.as_deref(), Some("Sintel"));
         assert_eq!(
             m.trackers,
@@ -199,6 +211,35 @@ mod tests {
         let uri = "magnet:?xt=urn:btih:tooshort";
         assert!(matches!(
             MagnetLink::parse(uri),
+            Err(MagnetError::InvalidInfoHash(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_non_ascii_hex_hash() {
+        let hash = format!("a\u{e9}{}", "0".repeat(37));
+        assert_eq!(hash.len(), 40);
+        assert!(matches!(
+            decode_info_hash(&hash),
+            Err(MagnetError::InvalidInfoHash(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_signed_hex_hash() {
+        let hash = format!("+a{}", "0".repeat(38));
+        assert!(matches!(
+            decode_info_hash(&hash),
+            Err(MagnetError::InvalidInfoHash(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_non_ascii_base32_hash() {
+        let hash = format!("\u{e9}{}", "A".repeat(30));
+        assert_eq!(hash.len(), 32);
+        assert!(matches!(
+            decode_info_hash(&hash),
             Err(MagnetError::InvalidInfoHash(_))
         ));
     }
