@@ -6,7 +6,6 @@ import UniformTypeIdentifiers
 @MainActor
 enum DefaultAppHelper {
     static var neotorrentBundleURL: URL { Bundle.main.bundleURL }
-    static var neotorrentBundleID: String? { Bundle.main.bundleIdentifier }
 
     static var magnetProbeURL: URL { URL(string: "magnet:?xt=urn:btih:0000000000000000000000000000000000000000")! }
 
@@ -65,12 +64,5 @@ enum DefaultAppHelper {
         } catch {
             return error
         }
-    }
-}
-
-extension NSWorkspace {
-    /// Convenience overload for resolving the default handler for a UTType.
-    func urlForApplication(toOpen contentType: UTType) -> URL? {
-        urlsForApplications(toOpen: contentType).first
     }
 }

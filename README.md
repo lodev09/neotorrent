@@ -16,7 +16,10 @@ everything.
 - Per-file selection (skip files you don't want)
 - Resumes torrents on app launch
 - Session-wide bandwidth limits (live-updatable)
-- Customizable download folder
+- Seed ratio limit (auto-pause completed torrents)
+- Accepts incoming peer connections (UPnP port forwarding)
+- Keeps the Mac awake while downloading (toggleable)
+- Customizable download folder (applies without restart)
 - macOS default handler for `magnet:` links and `.torrent` files
 - Completion notifications + action/chime sound effects (toggleable)
 
@@ -40,7 +43,8 @@ SwiftUI app  ──UniFFI──>  Rust core
 The WebRTC modules (`peer.rs`, `tracker.rs`, `wire.rs`, `extension.rs`,
 `engine.rs`) are end-to-end working against real WebTorrent peers but not yet
 wired into the librqbit-backed download path. They're kept in tree for a future
-hybrid client that also speaks WebRTC.
+hybrid client that also speaks WebRTC, behind the off-by-default `webrtc` cargo
+feature so the app build doesn't compile them.
 
 ## Contributing
 

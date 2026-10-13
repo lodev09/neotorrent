@@ -27,7 +27,7 @@ struct ContentView: View {
             } else {
                 torrentList
             }
-            if let err = sessionHolder.addError {
+            if let err = sessionHolder.errorMessage {
                 HStack(spacing: 10) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.callout)
@@ -40,7 +40,7 @@ struct ContentView: View {
                         .truncationMode(.tail)
                     Spacer()
                     Button {
-                        sessionHolder.addError = nil
+                        sessionHolder.errorMessage = nil
                     } label: {
                         Image(systemName: "xmark")
                             .font(.caption.weight(.semibold))
@@ -56,12 +56,11 @@ struct ContentView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: sessionHolder.addError)
-        // .containerBackground(.thickMaterial, for: .window)
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: sessionHolder.errorMessage)
         .navigationTitle("NeoTorrent")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button(action: pickTorrentFile) {
+                Button(action: sessionHolder.pickAndAddTorrentFiles) {
                     Label("Add", systemImage: "plus")
                 }
                 .help("Add .torrent file")
@@ -73,18 +72,14 @@ struct ContentView: View {
         .focusEffectDisabled()
         .focused($paneFocused)
         .task { paneFocused = true }
-        .onDrop(of: [.fileURL], delegate: TorrentFileDropDelegate(handler: handleDroppedFiles))
-        .onPasteCommand(of: [UTType.url.identifier, UTType.plainText.identifier], perform: handlePastedItems)
-        .onReceive(NotificationCenter.default.publisher(for: .neotorrentPasteFromClipboard)) { _ in
-            pasteFromClipboard()
+        .onDrop(of: [.fileURL, .url, .plainText], delegate: TorrentDropDelegate(handler: sessionHolder.addDropped))
+        .onPasteCommand(of: [UTType.url.identifier, UTType.plainText.identifier]) { _ in
+            sessionHolder.addFromClipboard()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .neotorrentOpenTorrentFile)) { _ in
-            pickTorrentFile()
-        }
-        .task(id: sessionHolder.addError) {
-            guard sessionHolder.addError != nil else { return }
+        .task(id: sessionHolder.errorMessage) {
+            guard sessionHolder.errorMessage != nil else { return }
             try? await Task.sleep(for: .seconds(5))
-            sessionHolder.addError = nil
+            sessionHolder.errorMessage = nil
         }
     }
 
@@ -103,9 +98,9 @@ struct ContentView: View {
                         },
                         onReveal: { store.revealInFinder(id: t.id) },
                         onToggleFile: { file, isSelected in
-                            Task { await toggleFile(torrentID: t.id, file: file, isSelected: isSelected) }
+                            store.setFile(file, selected: isSelected, torrentID: t.id)
                         },
-                        files: { sessionHolder.session.flatMap { try? $0.files(id: t.id) } ?? [] },
+                        files: store.files[t.id] ?? [],
                         playURL: store.playableURLs[t.id],
                         isPlaying: store.playingTorrentID == t.id,
                         onPlay: { store.togglePlayback(id: t.id) },
@@ -129,7 +124,7 @@ struct ContentView: View {
             Image(systemName: "tray.and.arrow.down")
                 .font(.system(size: 22, weight: .light))
                 .foregroundStyle(.tertiary)
-            Text("Drop a .torrent file or paste a magnet link")
+            Text("Drop a .torrent file or magnet link, or paste one")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
@@ -149,84 +144,6 @@ struct ContentView: View {
             if expandedIDs.contains(id) { expandedIDs.remove(id) } else { expandedIDs.insert(id) }
         }
     }
-
-    private func pickTorrentFile() {
-        guard sessionHolder.session != nil else { return }
-        let panel = NSOpenPanel()
-        if let type = UTType(filenameExtension: "torrent") {
-            panel.allowedContentTypes = [type]
-        }
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = true
-        panel.message = "Choose .torrent file(s) to add"
-        guard panel.runModal() == .OK else { return }
-        let urls = panel.urls
-        sessionHolder.addError = nil
-        Task {
-            for url in urls {
-                do { _ = try await sessionHolder.add(uri: url.path) }
-                catch { sessionHolder.addError = friendlyAddError(error) }
-            }
-            store.refresh()
-        }
-    }
-
-    private func handlePastedItems(_ providers: [NSItemProvider]) {
-        pasteFromClipboard()
-    }
-
-    private func pasteFromClipboard() {
-        let pb = NSPasteboard.general
-        var candidates: [String] = []
-        if let urls = pb.readObjects(forClasses: [NSURL.self]) as? [URL] {
-            candidates.append(contentsOf: urls.map { $0.absoluteString })
-        }
-        if let strings = pb.readObjects(forClasses: [NSString.self]) as? [String] {
-            candidates.append(contentsOf: strings)
-        }
-        var seen: Set<String> = []
-        Task { @MainActor in
-            sessionHolder.addError = nil
-            for raw in candidates {
-                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { continue }
-                do {
-                    _ = try await sessionHolder.add(uri: trimmed)
-                } catch {
-                    sessionHolder.addError = friendlyAddError(error)
-                }
-            }
-            store.refresh()
-        }
-    }
-
-    private func handleDroppedFiles(_ urls: [URL]) {
-        Task {
-            sessionHolder.addError = nil
-            for url in urls where url.pathExtension.lowercased() == "torrent" {
-                let uri = url.isFileURL ? url.path : url.absoluteString
-                do { _ = try await sessionHolder.add(uri: uri) } catch {
-                    sessionHolder.addError = friendlyAddError(error)
-                }
-            }
-            store.refresh()
-        }
-    }
-
-    private func toggleFile(torrentID: UInt64, file: TorrentFile, isSelected: Bool) async {
-        guard let session = sessionHolder.session,
-              let current = try? session.files(id: torrentID) else { return }
-        var indices = current
-            .filter { $0.index == file.index ? isSelected : $0.selected }
-            .map { $0.index }
-        // Ensure at least one file remains selected — librqbit treats an empty
-        // set as "download nothing" which can leave the torrent in a weird state.
-        if indices.isEmpty {
-            indices = current.map { $0.index }
-        }
-        try? await session.setOnlyFiles(id: torrentID, indices: indices)
-    }
 }
 
 struct TorrentRow: View {
@@ -238,7 +155,7 @@ struct TorrentRow: View {
     let onRemove: (Bool) -> Void
     let onReveal: () -> Void
     let onToggleFile: (TorrentFile, Bool) -> Void
-    let files: () -> [TorrentFile]
+    let files: [TorrentFile]
     let playURL: URL?
     let isPlaying: Bool
     let onPlay: () -> Void
@@ -251,13 +168,14 @@ struct TorrentRow: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 10) {
-                    Button(action: paused ? onResume : onPause) {
+                    Button(action: torrent.isErrored || paused ? onResume : onPause) {
                         Image(systemName: iconName)
                             .font(.title2)
                             .foregroundStyle(stateColor)
                     }
                     .buttonStyle(.plain)
-                    .help(paused ? "Resume" : "Pause")
+                    .disabled(torrent.isChecking)
+                    .help(primaryActionHelp)
                     Text(torrent.name ?? "fetching metadata…")
                         .font(.title3.weight(.semibold))
                         .lineLimit(1)
@@ -282,8 +200,21 @@ struct TorrentRow: View {
                             .frame(width: 40, alignment: .leading)
                     }
                     .fixedSize()
-                    if torrent.isFinished {
-                        Text("Completed")
+                    if torrent.isErrored {
+                        Text("Error: \(torrent.error ?? "unknown")")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .help(torrent.error ?? "")
+                        Spacer()
+                    } else if torrent.isChecking {
+                        Text("Checking files…")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    } else if torrent.isFinished {
+                        Text(paused ? "Completed · Paused" : "Completed")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -296,7 +227,7 @@ struct TorrentRow: View {
                         stat("arrow.down", formatRate(torrent.downloadBps))
                         stat("arrow.up", formatRate(torrent.uploadBps))
                         stat("person.2.fill", "\(torrent.peersLive)/\(torrent.peersSeen)")
-                        if !torrent.isFinished, torrent.downloadBps > 0, torrent.totalBytes > torrent.downloadedBytes {
+                        if torrent.downloadBps > 0, torrent.totalBytes > torrent.downloadedBytes {
                             stat("clock", formatETA(remaining: torrent.totalBytes - torrent.downloadedBytes, bps: torrent.downloadBps))
                         }
                         Spacer()
@@ -311,7 +242,7 @@ struct TorrentRow: View {
             .contentShape(Rectangle())
             .onTapGesture { onToggle() }
             if expanded {
-                FileList(files: files(), onToggle: onToggleFile, onCollapse: onToggle)
+                FileList(files: files, onToggle: onToggleFile, onCollapse: onToggle)
                     .padding(.horizontal, 14)
                     .padding(.bottom, 14)
                     .transition(.opacity.combined(with: .move(edge: .top)))
@@ -374,18 +305,14 @@ struct TorrentRow: View {
                 Image(systemName: isPlaying ? "stop.fill" : "play.fill")
                     .foregroundStyle(isPlaying ? AnyShapeStyle(.red) : AnyShapeStyle(.primary))
             }
-            .help(isPlaying ? "Stop VLC" : "Play in VLC")
+            .help(isPlaying ? "Stop VLC" : TorrentStore.vlcBinary == nil ? "Stream in browser" : "Play in VLC")
         }
         Button(action: onReveal) {
             Image(systemName: "folder")
         }
         .help("Reveal in Finder")
         Button {
-            if torrent.isFinished {
-                onRemove(false)
-            } else {
-                confirmingRemove = true
-            }
+            confirmingRemove = true
         } label: {
             Image(systemName: "trash")
         }
@@ -393,13 +320,24 @@ struct TorrentRow: View {
     }
 
     private var iconName: String {
+        if torrent.isErrored { return "exclamationmark.circle.fill" }
+        if torrent.isChecking { return "arrow.triangle.2.circlepath.circle.fill" }
         if torrent.isFinished { return "checkmark.circle.fill" }
         return paused ? "arrow.clockwise.circle.fill" : "pause.circle.fill"
     }
 
     private var stateColor: Color {
-        if torrent.isFinished { return .green }
+        if torrent.isErrored { return .red }
+        if torrent.isChecking { return .gray }
+        if torrent.isFinished { return paused ? .gray : .green }
         return paused ? .gray : .blue
+    }
+
+    private var primaryActionHelp: String {
+        if torrent.isErrored { return "Retry" }
+        if torrent.isChecking { return "Checking files…" }
+        if torrent.isFinished { return paused ? "Resume seeding" : "Pause seeding" }
+        return paused ? "Resume" : "Pause"
     }
 
     private func stat(_ icon: String, _ value: String) -> some View {
@@ -448,7 +386,10 @@ struct PendingRow: View {
                 Spacer()
             }
         }
-        .cardChrome()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .glassCard(enabled: true, cornerRadius: 12)
+        .shadow(color: Color.black.opacity(0.08), radius: 3, y: 1)
         .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .onContinuousHover { phase in
             switch phase {
@@ -459,97 +400,60 @@ struct PendingRow: View {
     }
 }
 
-extension View {
-    func cardChrome() -> some View {
-        self
-            .padding(14)
-            .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
-            )
-            .shadow(color: Color.black.opacity(0.08), radius: 3, y: 1)
-    }
-}
-
 struct FileList: View {
     let files: [TorrentFile]
     let onToggle: (TorrentFile, Bool) -> Void
     let onCollapse: () -> Void
 
-    // Optimistic overrides — flip instantly on click; cleared once the
-    // backend's reported `selected` catches up (next poll tick).
-    @State private var pending: [UInt32: Bool] = [:]
-
     var body: some View {
-        if files.isEmpty {
-            HStack {
-                Image(systemName: "info.circle").foregroundStyle(.tertiary)
-                Text("File list available after metadata resolves")
-                    .font(.caption).foregroundStyle(.tertiary)
-            }
-        } else {
-            let showCheckbox = files.count > 1
-            VStack(alignment: .leading, spacing: 3) {
-                ForEach(files, id: \.index) { f in
-                    let isOn = pending[f.index] ?? f.selected
-                    HStack(spacing: 6) {
-                        if showCheckbox {
-                            Toggle("", isOn: Binding(
-                                get: { isOn },
-                                set: { newValue in
-                                    pending[f.index] = newValue
-                                    onToggle(f, newValue)
-                                }
-                            ))
-                            .toggleStyle(.checkbox)
-                            .labelsHidden()
-                            .allowsHitTesting(false)
-                        }
-                        Image(systemName: fileIcon(f, selected: isOn))
-                            .foregroundStyle(fileIconColor(f, selected: isOn))
-                        Text(f.path)
-                            .font(.system(.callout, design: .monospaced))
-                            .foregroundStyle(isOn ? .primary : .tertiary)
-                            .strikethrough(!isOn)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                guard showCheckbox else { return }
-                                let newValue = !isOn
-                                pending[f.index] = newValue
-                                onToggle(f, newValue)
-                            }
-                        Spacer()
-                        Text(progressText(f, selected: isOn))
-                            .font(.callout.monospacedDigit())
-                            .foregroundStyle(.secondary)
+        let showCheckbox = files.count > 1
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(files, id: \.index) { f in
+                HStack(spacing: 6) {
+                    if showCheckbox {
+                        Toggle("", isOn: Binding(
+                            get: { f.selected },
+                            set: { onToggle(f, $0) }
+                        ))
+                        .toggleStyle(.checkbox)
+                        .labelsHidden()
                     }
-                    .contentShape(Rectangle())
-                    .onTapGesture { onCollapse() }
+                    Image(systemName: fileIcon(f))
+                        .foregroundStyle(fileIconColor(f))
+                    Text(f.path)
+                        .font(.system(.callout, design: .monospaced))
+                        .foregroundStyle(f.selected ? .primary : .tertiary)
+                        .strikethrough(!f.selected)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            guard showCheckbox else { return }
+                            onToggle(f, !f.selected)
+                        }
+                    Spacer()
+                    Text(progressText(f))
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(.secondary)
                 }
-            }
-            .onChange(of: files.map { $0.selected }) {
-                pending = pending.filter { idx, val in
-                    files.first(where: { $0.index == idx })?.selected != val
-                }
+                .contentShape(Rectangle())
+                .onTapGesture { onCollapse() }
             }
         }
     }
 
-    private func fileIcon(_ f: TorrentFile, selected: Bool) -> String {
-        if !selected { return "minus.circle" }
+    private func fileIcon(_ f: TorrentFile) -> String {
+        if !f.selected { return "minus.circle" }
         return f.downloaded >= f.length ? "checkmark.circle.fill" : "doc"
     }
 
-    private func fileIconColor(_ f: TorrentFile, selected: Bool) -> Color {
-        if !selected { return .gray.opacity(0.6) }
+    private func fileIconColor(_ f: TorrentFile) -> Color {
+        if !f.selected { return .gray.opacity(0.6) }
         return f.downloaded >= f.length ? .green : .secondary
     }
 
-    private func progressText(_ f: TorrentFile, selected: Bool) -> String {
-        if !selected {
+    private func progressText(_ f: TorrentFile) -> String {
+        if !f.selected {
             return "skipped (\(formatBytes(f.length)))"
         }
         if f.downloaded >= f.length {
@@ -559,30 +463,39 @@ struct FileList: View {
     }
 }
 
-struct TorrentFileDropDelegate: DropDelegate {
-    let handler: ([URL]) -> Void
+/// Collects dropped .torrent files, magnet/http links, and plain text.
+struct TorrentDropDelegate: DropDelegate {
+    let handler: @MainActor ([String]) -> Void
 
     func performDrop(info: DropInfo) -> Bool {
-        let providers = info.itemProviders(for: [.fileURL])
-        let box = URLBox()
+        let box = StringBox()
         let group = DispatchGroup()
-        for p in providers {
+        for p in info.itemProviders(for: [.fileURL, .url, .plainText]) {
             group.enter()
-            _ = p.loadObject(ofClass: URL.self) { url, _ in
-                if let u = url { box.append(u) }
-                group.leave()
+            if p.canLoadObject(ofClass: URL.self) {
+                _ = p.loadObject(ofClass: URL.self) { url, _ in
+                    if let url { box.append(url.absoluteString) }
+                    group.leave()
+                }
+            } else {
+                _ = p.loadObject(ofClass: String.self) { text, _ in
+                    if let text { box.append(text) }
+                    group.leave()
+                }
             }
         }
-        group.notify(queue: .main) { handler(box.snapshot()) }
+        group.notify(queue: .main) {
+            MainActor.assumeIsolated { handler(box.snapshot()) }
+        }
         return true
     }
 }
 
-private final class URLBox: @unchecked Sendable {
+private final class StringBox: @unchecked Sendable {
     private let lock = NSLock()
-    private var urls: [URL] = []
-    func append(_ u: URL) { lock.lock(); urls.append(u); lock.unlock() }
-    func snapshot() -> [URL] { lock.lock(); defer { lock.unlock() }; return urls }
+    private var strings: [String] = []
+    func append(_ s: String) { lock.lock(); strings.append(s); lock.unlock() }
+    func snapshot() -> [String] { lock.lock(); defer { lock.unlock() }; return strings }
 }
 
 extension View {

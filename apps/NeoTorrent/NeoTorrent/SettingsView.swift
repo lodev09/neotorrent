@@ -8,19 +8,35 @@ final class Preferences {
     static let downloadMBpsKey = "preferences.downloadMBps"
     static let uploadMBpsKey = "preferences.uploadMBps"
     static let playSoundsKey = "preferences.playSounds"
+    static let seedRatioLimitKey = "preferences.seedRatioLimit"
+    static let preventSleepKey = "preferences.preventSleep"
 
+    /// The FFI takes UInt32 bytes/sec; 4095 MB/s is the largest that fits.
+    static let maxMBps = 4095.0
+
+    /// Where new torrents are saved. Existing torrents keep their folder.
     var downloadDir: String {
         didSet { UserDefaults.standard.set(downloadDir, forKey: Self.downloadDirKey) }
     }
     /// 0 = unlimited. Megabytes per second.
-    var downloadMBps: Int {
+    var downloadMBps: Double {
         didSet {
+            let clamped = Self.clampRate(downloadMBps)
+            guard clamped == downloadMBps else {
+                downloadMBps = clamped
+                return
+            }
             UserDefaults.standard.set(downloadMBps, forKey: Self.downloadMBpsKey)
             applyLimits()
         }
     }
-    var uploadMBps: Int {
+    var uploadMBps: Double {
         didSet {
+            let clamped = Self.clampRate(uploadMBps)
+            guard clamped == uploadMBps else {
+                uploadMBps = clamped
+                return
+            }
             UserDefaults.standard.set(uploadMBps, forKey: Self.uploadMBpsKey)
             applyLimits()
         }
@@ -29,9 +45,23 @@ final class Preferences {
     var playSounds: Bool {
         didSet { UserDefaults.standard.set(playSounds, forKey: Self.playSoundsKey) }
     }
+    /// Pause completed torrents after uploading this many times their size. 0 = never.
+    var seedRatioLimit: Double {
+        didSet {
+            let clamped = seedRatioLimit.isFinite ? max(0, seedRatioLimit) : 0
+            guard clamped == seedRatioLimit else {
+                seedRatioLimit = clamped
+                return
+            }
+            UserDefaults.standard.set(seedRatioLimit, forKey: Self.seedRatioLimitKey)
+        }
+    }
+    /// Keep the Mac awake while anything is downloading.
+    var preventSleep: Bool {
+        didSet { UserDefaults.standard.set(preventSleep, forKey: Self.preventSleepKey) }
+    }
 
-    var sessionDownloadDir: String = ""
-    var session: NeoTorrentSession?
+    @ObservationIgnored private var session: NeoTorrentSession?
 
     static var defaultDownloadDir: String {
         (NSHomeDirectory() as NSString).appendingPathComponent("Downloads")
@@ -40,29 +70,27 @@ final class Preferences {
     init() {
         let d = UserDefaults.standard
         self.downloadDir = d.string(forKey: Self.downloadDirKey) ?? Self.defaultDownloadDir
-        self.downloadMBps = d.integer(forKey: Self.downloadMBpsKey)
-        self.uploadMBps = d.integer(forKey: Self.uploadMBpsKey)
+        self.downloadMBps = Self.clampRate(d.double(forKey: Self.downloadMBpsKey))
+        self.uploadMBps = Self.clampRate(d.double(forKey: Self.uploadMBpsKey))
+        self.seedRatioLimit = d.double(forKey: Self.seedRatioLimitKey)
         // For bools, default to true if never set.
         self.playSounds = d.object(forKey: Self.playSoundsKey) as? Bool ?? true
+        self.preventSleep = d.object(forKey: Self.preventSleepKey) as? Bool ?? true
     }
 
-    func attach(_ session: NeoTorrentSession, sessionDir: String) {
+    func attach(_ session: NeoTorrentSession) {
         self.session = session
-        self.sessionDownloadDir = sessionDir
         applyLimits()
     }
 
-    var pendingRestart: Bool {
-        !sessionDownloadDir.isEmpty && downloadDir != sessionDownloadDir
+    private static func clampRate(_ mbps: Double) -> Double {
+        mbps.isFinite ? min(max(0, mbps), maxMBps) : 0
     }
 
     private func applyLimits() {
-        guard let session else { return }
-        // Clamp before multiplying — the FFI takes UInt32 bps, so anything
-        // past ~4096 MB/s would overflow (and crash on the UInt32 init).
-        session.setRateLimits(
-            downloadBps: UInt32(clamping: min(max(0, downloadMBps), 4095) * 1024 * 1024),
-            uploadBps: UInt32(clamping: min(max(0, uploadMBps), 4095) * 1024 * 1024)
+        session?.setRateLimits(
+            downloadBps: UInt32(downloadMBps * 1024 * 1024),
+            uploadBps: UInt32(uploadMBps * 1024 * 1024)
         )
     }
 }
@@ -93,27 +121,29 @@ struct SettingsView: View {
                         }
                     }
                 }
-                if prefs.pendingRestart {
-                    HStack(spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                        Text("Restart NeoTorrent to apply the new folder. Existing torrents continue downloading to their original location.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                Text("New torrents are saved here. Existing torrents keep their location.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Bandwidth") {
-                rateField("Max download", value: $bindable.downloadMBps)
-                rateField("Max upload", value: $bindable.uploadMBps)
+                numberField("Max download", value: $bindable.downloadMBps, unit: "MB/s")
+                numberField("Max upload", value: $bindable.uploadMBps, unit: "MB/s")
                 Text("0 = unlimited. Applies immediately, session-wide.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Seeding") {
+                numberField("Stop seeding at ratio", value: $bindable.seedRatioLimit, unit: "×")
+                Text("Pauses a completed torrent once it has uploaded this many times its size since it was last started. 0 = seed indefinitely.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             Section("Behavior") {
                 Toggle("Play sound effects", isOn: $bindable.playSounds)
+                Toggle("Prevent sleep while downloading", isOn: $bindable.preventSleep)
             }
 
             Section("System") {
@@ -203,16 +233,17 @@ struct SettingsView: View {
         }
     }
 
-    private func rateField(_ label: String, value: Binding<Int>) -> some View {
+    private func numberField(_ label: String, value: Binding<Double>, unit: String) -> some View {
         HStack {
             Text(label)
             Spacer()
-            TextField("", value: value, format: .number)
+            TextField("", value: value, format: .number.precision(.fractionLength(0...2)))
                 .frame(width: 80)
                 .multilineTextAlignment(.trailing)
-            Text("MB/s")
+            Text(unit)
                 .foregroundStyle(.secondary)
                 .font(.callout)
+                .frame(width: 36, alignment: .leading)
         }
     }
 }
