@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Bump version in project.yml, commit, tag, push — triggers the release workflow.
+# Bump version in project.yml + Cargo.toml, commit, tag, push — triggers the
+# release workflow.
 # Usage:
 #   ./scripts/release.sh           # prompts, defaults to bumping the patch
 #   ./scripts/release.sh 0.2.0     # use the given version
@@ -10,6 +11,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 PROJECT="apps/NeoTorrent/project.yml"
+CARGO_MANIFEST="Cargo.toml"
 
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 if [ "$BRANCH" != "main" ]; then
@@ -80,9 +82,10 @@ cat <<EOF
 
   Will:
     1. set CFBundleShortVersionString="$VERSION", CFBundleVersion="$NEXT_BUILD" in $PROJECT
-    2. commit "Bump version to $VERSION"
-    3. push origin main
-    4. tag $TAG and push (triggers release workflow)
+    2. set [workspace.package] version="$VERSION" in $CARGO_MANIFEST (+ Cargo.lock)
+    3. commit "Bump version to $VERSION"
+    4. tag $TAG
+    5. push main + $TAG atomically (triggers release workflow)
 ─────────────────────────────────────
 EOF
 read -r -p "Proceed? [y/N] " ans
@@ -101,12 +104,15 @@ if git diff --quiet -- "$PROJECT"; then
     exit 1
 fi
 
-git add "$PROJECT"
-git commit -m "Bump version to $VERSION"
-git push origin main
+/usr/bin/sed -i '' \
+    -e "/^\[workspace\.package\]/,/^\[/ s/^version = \"[^\"]*\"/version = \"$VERSION\"/" \
+    "$CARGO_MANIFEST"
+cargo update --workspace --offline
 
+git add "$PROJECT" "$CARGO_MANIFEST" Cargo.lock
+git commit -m "Bump version to $VERSION"
 git tag -a "$TAG" -m "$TAG"
-git push origin "$TAG"
+git push --atomic origin main "$TAG"
 
 echo
 echo "==> pushed $TAG. Watch the build:"

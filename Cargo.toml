@@ -4,12 +4,12 @@ members = ["crates/*"]
 
 [workspace.package]
 edition = "2021"
-version = "0.1.0"
+version = "0.1.3"
 authors = ["Jovanni Lo <lodev09@gmail.com>"]
 license = "MIT"
 
 [workspace.dependencies]
-uniffi = { version = "0.28", features = ["tokio"] }
+uniffi = "0.28"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "net", "time", "io-util"] }
 tokio-tungstenite = { version = "0.24", features = ["connect", "native-tls"] }
 webrtc = "0.12"
@@ -17,7 +17,8 @@ bytes = "1"
 serde_bencode = "0.2"
 serde_bytes = "0.11"
 sha1 = "0.10"
-librqbit = { version = "8", features = ["http-api", "tracing-subscriber-utils"] }
+librqbit = { version = "8", default-features = false, features = ["default-tls", "http-api", "tracing-subscriber-utils"] }
+tracing = "0.1"
 anyhow = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 serde = { version = "1", features = ["derive", "rc"] }
@@ -31,3 +32,15 @@ form_urlencoded = "1"
 lto = true
 codegen-units = 1
 strip = true
+
+# Stripped proc-macro dylibs fail to load on recent macOS ("mis-aligned
+# LINKEDIT string pool"); only the shipped library needs stripping.
+[profile.release.build-override]
+strip = false
+
+[profile.dev-release]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
+strip = false

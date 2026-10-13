@@ -7,12 +7,16 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: 'Create a GitHub release and upload the DMG'
+        description: 'Create a GitHub release and upload the DMG (must run on a tag)'
         type: boolean
         default: false
 
 permissions:
-  contents: write
+  contents: read
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   build:
@@ -23,62 +27,54 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       publish: ${{ steps.version.outputs.publish }}
     steps:
-      - uses: actions/checkout@v5
-
-      - name: Select Xcode 26
-        run: |
-          XCODE="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort | tail -n1)"
-          if [ -z "$XCODE" ]; then
-            echo "error: no Xcode 26 found in /Applications" >&2
-            ls /Applications | grep -i xcode || true
-            exit 1
-          fi
-          sudo xcode-select -s "$XCODE"
-          xcodebuild -version
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Determine version
         id: version
+        env:
+          PUBLISH_INPUT: ${{ inputs.publish }}
         run: |
           VERSION="$(/usr/bin/sed -n 's/.*CFBundleShortVersionString: "\([^"]*\)".*/\1/p' apps/NeoTorrent/project.yml | head -n1)"
-          if [ "${{ github.event_name }}" = "push" ]; then
-            TAG_VERSION="${GITHUB_REF_NAME#v}"
-            if [ "$TAG_VERSION" != "$VERSION" ]; then
-              echo "error: tag $GITHUB_REF_NAME does not match project.yml version $VERSION" >&2
-              exit 1
-            fi
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
             PUBLISH="true"
           else
-            PUBLISH="${{ inputs.publish }}"
+            PUBLISH="$PUBLISH_INPUT"
           fi
+          case "$GITHUB_REF" in
+            refs/tags/*)
+              TAG_VERSION="${GITHUB_REF_NAME#v}"
+              if [ "$TAG_VERSION" != "$VERSION" ]; then
+                echo "error: tag $GITHUB_REF_NAME does not match project.yml version $VERSION" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              if [ "$PUBLISH" = "true" ]; then
+                echo "error: publishing requires running on a tag (got $GITHUB_REF)" >&2
+                exit 1
+              fi
+              ;;
+          esac
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION (publish=$PUBLISH)"
 
-      - name: Install build tools
-        run: brew install xcodegen just
+      - name: Set up Xcode + XcodeGen
+        run: ./scripts/ci-setup-xcode.sh
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin
+      - name: Install Rust toolchain
+        run: rustup toolchain install
 
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Import signing certificate
-        env:
-          CERT_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12 }}
-          CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
-        run: ./scripts/ci-import-cert.sh
-
-      - name: Build Rust core + bindings
-        run: PROFILE=release ./scripts/build-rust.sh
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Generate Xcode project
-        working-directory: apps/NeoTorrent
-        run: xcodegen generate
+        run: xcodegen generate --spec apps/NeoTorrent/project.yml
 
-      - name: Build signed app
-        env:
-          DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+      # Built unsigned so no build code (cargo build scripts, the Run Script
+      # phase) runs while the signing key is in the keychain.
+      - name: Build app
         run: |
           xcodebuild \
             -project apps/NeoTorrent/NeoTorrent.xcodeproj \
@@ -86,12 +82,28 @@ jobs:
             -configuration Release \
             -destination 'platform=macOS,arch=arm64' \
             -derivedDataPath build \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Developer ID Application" \
-            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-            CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
-            OTHER_CODE_SIGN_FLAGS="--timestamp --options runtime" \
+            CODE_SIGNING_ALLOWED=NO \
             clean build
+
+      - name: Import signing certificate
+        env:
+          CERT_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
+        run: ./scripts/ci-import-cert.sh
+
+      - name: Sign app
+        run: |
+          codesign \
+            --force \
+            --sign "Developer ID Application" \
+            --options runtime \
+            --timestamp \
+            --entitlements apps/NeoTorrent/NeoTorrent/NeoTorrent.entitlements \
+            build/Build/Products/Release/NeoTorrent.app
+
+      - name: Delete keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
 
       - name: Verify signature
         run: |
@@ -105,30 +117,30 @@ jobs:
           /usr/bin/ditto -c -k --keepParent "$APP" "NeoTorrent-signed.zip"
 
       - name: Upload signed app artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: neotorrent-signed-app
           path: NeoTorrent-signed.zip
           if-no-files-found: error
           retention-days: 14
 
-      - name: Cleanup keychain
-        if: always()
-        run: security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
-
   notarize:
-    name: Notarize + package + release
+    name: Notarize + package
     needs: build
     runs-on: macos-26
     timeout-minutes: 180
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Install packaging tools
         run: brew install create-dmg
 
       - name: Download signed app artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           name: neotorrent-signed-app
 
@@ -146,52 +158,78 @@ jobs:
           ./scripts/notarize.sh NeoTorrent-signed.zip
           xcrun stapler staple "build/Build/Products/Release/NeoTorrent.app"
 
-      - name: Import signing certificate (for DMG)
+      - name: Package DMG
+        run: |
+          APP_PATH="$PWD/build/Build/Products/Release/NeoTorrent.app" \
+            ./scripts/package-dmg.sh
+
+      - name: Import signing certificate
         env:
           CERT_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12 }}
           CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
         run: ./scripts/ci-import-cert.sh
 
-      - name: Package DMG
-        run: |
-          APP_PATH="$PWD/build/Build/Products/Release/NeoTorrent.app" \
-            VERSION="${{ needs.build.outputs.version }}" \
-            ./scripts/package-dmg.sh
+      - name: Sign DMG
+        run: codesign --sign "Developer ID Application" --timestamp "dist/NeoTorrent-$VERSION.dmg"
 
-      - name: Sign + notarize DMG
+      - name: Delete keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
+
+      - name: Notarize DMG
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
-          DMG="dist/NeoTorrent-${{ needs.build.outputs.version }}.dmg"
-          codesign --sign "Developer ID Application" --timestamp "$DMG"
+          DMG="dist/NeoTorrent-$VERSION.dmg"
           ./scripts/notarize.sh "$DMG"
           xcrun stapler staple "$DMG"
 
+      - name: Checksum DMG
+        working-directory: dist
+        run: shasum -a 256 "NeoTorrent-$VERSION.dmg" | tee "NeoTorrent-$VERSION.dmg.sha256"
+
       - name: Upload DMG artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: NeoTorrent-${{ needs.build.outputs.version }}-dmg
-          path: dist/NeoTorrent-${{ needs.build.outputs.version }}.dmg
+          path: |
+            dist/NeoTorrent-${{ needs.build.outputs.version }}.dmg
+            dist/NeoTorrent-${{ needs.build.outputs.version }}.dmg.sha256
           if-no-files-found: error
 
+  publish:
+    name: Publish GitHub release
+    needs: [build, notarize]
+    if: needs.build.outputs.publish == 'true' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - name: Download DMG artifact
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: NeoTorrent-${{ needs.build.outputs.version }}-dmg
+
       - name: Create GitHub release
-        if: needs.build.outputs.publish == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          VERSION="${{ needs.build.outputs.version }}"
-          TAG="v$VERSION"
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
+          TAG="$GITHUB_REF_NAME"
+          ASSETS=("NeoTorrent-$VERSION.dmg" "NeoTorrent-$VERSION.dmg.sha256")
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # No --clobber: fail rather than replace an already-published asset.
+            gh release upload "$TAG" "${ASSETS[@]}"
+          else
             gh release create "$TAG" \
+              --verify-tag \
+              --target "$GITHUB_SHA" \
               --title "$TAG" \
               --generate-notes \
-              "dist/NeoTorrent-$VERSION.dmg"
-          else
-            gh release upload "$TAG" "dist/NeoTorrent-$VERSION.dmg" --clobber
+              "${ASSETS[@]}"
           fi
-
-      - name: Cleanup keychain
-        if: always()
-        run: security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true

@@ -17,41 +17,38 @@ bindings:
 xcode:
     cd apps/NeoTorrent && xcodegen generate
 
-# Full macOS .app build (Rust → bindings → xcodegen → xcodebuild).
-app: bindings xcode
-    xcodebuild \
-        -project apps/NeoTorrent/NeoTorrent.xcodeproj \
-        -scheme NeoTorrent \
-        -configuration Debug \
-        -destination 'platform=macOS,arch=arm64' \
-        build
+# Debug .app build (xcodegen → xcodebuild; the target's Run Script phase builds Rust).
+app: xcode _build-debug
 
-# Swift-only rebuild + launch (skips Rust + xcodegen; use after UI tweaks).
-run:
-    osascript -e 'tell application "NeoTorrent" to quit' >/dev/null 2>&1 || true
-    xcodebuild \
-        -project apps/NeoTorrent/NeoTorrent.xcodeproj \
-        -scheme NeoTorrent \
-        -configuration Debug \
-        -destination 'platform=macOS,arch=arm64' \
-        build
-    open ~/Library/Developer/Xcode/DerivedData/NeoTorrent-*/Build/Products/Debug/NeoTorrent.app
+# Rebuild + relaunch the Debug .app (skips xcodegen; run `just xcode` after editing project.yml).
+run: _quit _build-debug
+    open build/debug/Build/Products/Debug/NeoTorrent.app
 
 # Release build of the .app.
-release:
-    PROFILE=release ./scripts/build-rust.sh
-    cd apps/NeoTorrent && xcodegen generate
+release: xcode
     xcodebuild \
         -project apps/NeoTorrent/NeoTorrent.xcodeproj \
         -scheme NeoTorrent \
         -configuration Release \
         -destination 'platform=macOS,arch=arm64' \
-        -derivedDataPath build \
+        -derivedDataPath build/release \
         build
 
 # Package the release .app into a DMG (ad-hoc signed; for local layout testing).
 dmg: release
-    APP_PATH="$PWD/build/Build/Products/Release/NeoTorrent.app" ./scripts/package-dmg.sh
+    APP_PATH="$PWD/build/release/Build/Products/Release/NeoTorrent.app" ./scripts/package-dmg.sh
+
+_build-debug:
+    xcodebuild \
+        -project apps/NeoTorrent/NeoTorrent.xcodeproj \
+        -scheme NeoTorrent \
+        -configuration Debug \
+        -destination 'platform=macOS,arch=arm64' \
+        -derivedDataPath build/debug \
+        build
+
+_quit:
+    osascript -e 'tell application "NeoTorrent" to quit' >/dev/null 2>&1 || true
 
 # Tag + push a release (prompts for version; defaults to bumping the patch).
 ship version="":
@@ -65,7 +62,7 @@ test:
 
 # Run network integration tests (`#[ignore]`d by default).
 test-net:
-    cargo test --release -- --ignored --nocapture
+    cargo test --release -p neotorrent-core --features webrtc -- --ignored --nocapture
 
 # Format Rust sources.
 fmt:

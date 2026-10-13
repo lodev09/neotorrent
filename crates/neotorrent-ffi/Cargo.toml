@@ -9,14 +9,8 @@ license.workspace = true
 crate-type = ["staticlib", "cdylib"]
 name = "neotorrent_ffi"
 
-[[bin]]
-name = "uniffi-bindgen"
-path = "src/bin/uniffi-bindgen.rs"
-required-features = ["cli"]
-
 [features]
 default = []
-cli = ["uniffi/cli"]
 
 [dependencies]
 neotorrent-core = { path = "../neotorrent-core" }

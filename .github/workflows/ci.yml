@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, test)
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: cargo fmt
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: cargo clippy (webrtc)
+        run: cargo clippy --locked --all-targets -p neotorrent-core --features webrtc -- -D warnings
+
+      - name: cargo test
+        run: cargo test --locked
+
+      - name: cargo test (webrtc)
+        run: cargo test --locked -p neotorrent-core --features webrtc
+
+  app:
+    name: App (unsigned Debug build)
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Xcode + XcodeGen
+        run: ./scripts/ci-setup-xcode.sh
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec apps/NeoTorrent/project.yml
+
+      # The target's "Build Rust core" Run Script phase runs scripts/build-rust.sh.
+      - name: Build app
+        run: |
+          xcodebuild \
+            -project apps/NeoTorrent/NeoTorrent.xcodeproj \
+            -scheme NeoTorrent \
+            -configuration Debug \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath build/debug \
+            CODE_SIGNING_ALLOWED=NO \
+            build

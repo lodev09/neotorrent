@@ -22,7 +22,10 @@ targets:
     sources:
       - path: NeoTorrent
         excludes:
-          - "Generated/*.a"
+          - "Generated"
+      # Produced by the "Build Rust core" phase; may not exist at generation time.
+      - path: NeoTorrent/Generated/neotorrent_ffi.swift
+        optional: true
     info:
       path: NeoTorrent/Info.plist
       properties:
@@ -35,7 +38,7 @@ targets:
         # Register neotorrent as the handler for magnet: links.
         CFBundleURLTypes:
           - CFBundleURLName: com.lodev09.neotorrent.magnet
-            CFBundleTypeRole: Editor
+            CFBundleTypeRole: Viewer
             CFBundleURLSchemes:
               - magnet
         # Register neotorrent as a handler for .torrent files.
@@ -67,21 +70,26 @@ targets:
         SWIFT_INCLUDE_PATHS: "$(SRCROOT)/NeoTorrent/Generated"
         LIBRARY_SEARCH_PATHS: "$(SRCROOT)/NeoTorrent/Generated"
         OTHER_LDFLAGS: "-lneotorrent_ffi -lc++ -framework Security -framework SystemConfiguration"
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
     entitlements:
       path: NeoTorrent/NeoTorrent.entitlements
       properties:
         com.apple.security.app-sandbox: false
-        com.apple.security.network.client: true
-        com.apple.security.network.server: true
-        com.apple.security.files.user-selected.read-write: true
-        com.apple.security.files.downloads.read-write: true
-    scheme:
-      preActions:
-        - script: |
-            cd "$SRCROOT/../.."
-            ./scripts/build-rust.sh > "${TMPDIR:-/tmp}/neotorrent-build-rust.log" 2>&1 || {
-                cat "${TMPDIR:-/tmp}/neotorrent-build-rust.log" >&2
-                exit 1
-            }
-          name: Build Rust core
-          settingsTarget: NeoTorrent
+    preBuildScripts:
+      # Debug stays optimized (SHA1 piece hashing is too slow unoptimized) but
+      # skips fat LTO via the `dev-release` cargo profile.
+      - name: Build Rust core
+        script: |
+          if [ "$CONFIGURATION" = "Release" ]; then
+              export PROFILE=release
+          else
+              export PROFILE=dev-release
+          fi
+          exec "$SRCROOT/../../scripts/build-rust.sh"
+        basedOnDependencyAnalysis: false
+        outputFiles:
+          - $(SRCROOT)/NeoTorrent/Generated/neotorrent_ffi.swift
+          - $(SRCROOT)/NeoTorrent/Generated/neotorrent_ffiFFI.h
+          - $(SRCROOT)/NeoTorrent/Generated/module.modulemap
+          - $(SRCROOT)/NeoTorrent/Generated/libneotorrent_ffi.a
+    scheme: {}

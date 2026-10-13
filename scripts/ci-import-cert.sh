@@ -17,12 +17,15 @@ CERT_PATH="$RUNNER_TEMP/cert.p12"
 KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
 KEYCHAIN_PASSWORD="$(uuidgen)"
 
+umask 077
+trap 'rm -f "$CERT_PATH"' EXIT
 echo -n "$CERT_P12_BASE64" | base64 --decode -o "$CERT_PATH"
 
 security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
 security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-security import "$CERT_PATH" -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+security import "$CERT_PATH" -P "$CERT_PASSWORD" -T /usr/bin/codesign -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+rm -f "$CERT_PATH"
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychain -d user | xargs)
 

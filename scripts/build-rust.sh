@@ -44,13 +44,13 @@ OUT_DIR="apps/NeoTorrent/NeoTorrent/Generated"
 mkdir -p "$OUT_DIR"
 
 echo "==> cargo build ($PROFILE, $TARGET)"
-cargo build --profile "$PROFILE" --target "$TARGET" -p "$CRATE"
+cargo build --locked --profile "$PROFILE" --target "$TARGET" -p "$CRATE"
 
 DYLIB="target/$TARGET/$CARGO_PROFILE_DIR/lib${LIB_NAME}.dylib"
 STATICLIB="target/$TARGET/$CARGO_PROFILE_DIR/lib${LIB_NAME}.a"
 
 echo "==> uniffi-bindgen (Swift)"
-cargo run --features cli -p "$CRATE" --bin uniffi-bindgen -- \
+cargo run --locked --release -p uniffi-bindgen -- \
     generate \
     --library "$DYLIB" \
     --language swift \
@@ -68,10 +68,27 @@ cp "$STATICLIB" "$OUT_DIR/lib${LIB_NAME}.a"
 # headers have no slack), so we patch the four bytes directly.
 ARCHIVE="$OUT_DIR/lib${LIB_NAME}.a"
 echo "==> patching LC_BUILD_VERSION minos in $(basename "$ARCHIVE")"
+# `ar x` extracts into a flat directory, so same-named members would silently
+# overwrite each other and drop objects from the repacked archive.
+LISTING="$(ar t "$ARCHIVE")"
+MEMBERS=()
+while IFS= read -r member; do
+    case "$member" in
+        __.SYMDEF*) ;;
+        *) MEMBERS+=("$member") ;;
+    esac
+done <<<"$LISTING"
+DUPES="$(printf '%s\n' "${MEMBERS[@]}" | sort | uniq -d)"
+if [ -n "$DUPES" ]; then
+    echo "error: $ARCHIVE has duplicate member names; cannot repack safely:" >&2
+    echo "$DUPES" >&2
+    exit 1
+fi
 WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
 (cd "$WORK" && ar x "$ROOT/$ARCHIVE")
-python3 - "$WORK" <<'PY'
-import os, struct, sys, glob
+python3 - "$WORK" "${MEMBERS[@]}" <<'PY'
+import os, struct, sys
 
 LC_BUILD_VERSION = 0x32
 TARGET_MINOS = (15 << 16) | (0 << 8) | 0   # 15.0.0
@@ -104,21 +121,17 @@ def patch(path):
 
 work = sys.argv[1]
 changed = 0
-for obj in glob.glob(os.path.join(work, '*.o')):
-    if patch(obj):
+for member in sys.argv[2:]:
+    if patch(os.path.join(work, member)):
         changed += 1
 print(f"    patched {changed} object(s)")
 PY
-(cd "$WORK" && ar rcs "rebuilt.a" *.o)
+(cd "$WORK" && ar rcs "rebuilt.a" "${MEMBERS[@]}")
 mv "$WORK/rebuilt.a" "$ARCHIVE"
-rm -rf "$WORK"
 
 # UniFFI emits <module>FFI.modulemap; rename to module.modulemap so Swift
 # finds it via SWIFT_INCLUDE_PATHS without extra config.
-MAP_SRC="$(ls "$OUT_DIR"/*.modulemap | head -n1 || true)"
-if [ -n "$MAP_SRC" ] && [ "$(basename "$MAP_SRC")" != "module.modulemap" ]; then
-    mv "$MAP_SRC" "$OUT_DIR/module.modulemap"
-fi
+mv -f "$OUT_DIR/${LIB_NAME}FFI.modulemap" "$OUT_DIR/module.modulemap"
 
 # UniFFI's generated Swift declares two file-private globals that trip strict
 # concurrency checks. Tag them `nonisolated(unsafe)` — UniFFI's runtime
