@@ -59,12 +59,16 @@ impl From<webrtc::Error> for PeerError {
 #[derive(Clone, Debug)]
 pub struct PeerConfig {
     pub ice_servers: Vec<String>,
+    /// Advertise host candidates as random `.local` names so LAN IPs never
+    /// reach public trackers. Needs working mDNS to connect over the LAN.
+    pub hide_local_ips: bool,
 }
 
 impl Default for PeerConfig {
     fn default() -> Self {
         Self {
             ice_servers: DEFAULT_ICE_SERVERS.iter().map(|s| s.to_string()).collect(),
+            hide_local_ips: true,
         }
     }
 }
@@ -176,11 +180,12 @@ fn new_peer_connection(
     config: &PeerConfig,
 ) -> impl std::future::Future<Output = Result<PcHandle, PeerError>> + use<> {
     let cfg = rtc_config(config);
+    let hide_local_ips = config.hide_local_ips;
     async move {
-        // Advertise host candidates as random `.local` names so LAN IPs never
-        // reach public trackers.
         let mut settings = SettingEngine::default();
-        settings.set_ice_multicast_dns_mode(MulticastDnsMode::QueryAndGather);
+        if hide_local_ips {
+            settings.set_ice_multicast_dns_mode(MulticastDnsMode::QueryAndGather);
+        }
         let api = APIBuilder::new().with_setting_engine(settings).build();
         let pc = api.new_peer_connection(cfg).await?;
         Ok(PcHandle(Arc::new(pc)))
@@ -324,14 +329,27 @@ pub async fn answer_offer(
 mod tests {
     use super::*;
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn local_offer_answer_roundtrip() {
-        let config = PeerConfig::default();
+    /// Loopback connections can't rely on mDNS (unavailable on CI runners).
+    fn loopback_config() -> PeerConfig {
+        PeerConfig {
+            hide_local_ips: false,
+            ..PeerConfig::default()
+        }
+    }
 
-        let (offer_sdp, offering) = create_offer(config.clone()).await.expect("offer");
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn default_config_hides_host_ips() {
+        let (offer_sdp, _offering) = create_offer(PeerConfig::default()).await.expect("offer");
         for line in offer_sdp.lines().filter(|l| l.contains("typ host")) {
             assert!(line.contains(".local"), "host candidate leaks IP: {line}");
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn local_offer_answer_roundtrip() {
+        let config = loopback_config();
+
+        let (offer_sdp, offering) = create_offer(config.clone()).await.expect("offer");
         let (answer_sdp, answering) = answer_offer(offer_sdp, config.clone())
             .await
             .expect("answer");
@@ -365,7 +383,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn answering_side_closes_extra_data_channels() {
-        let config = PeerConfig::default();
+        let config = loopback_config();
         let pc = new_peer_connection(&config).await.expect("pc");
         let init = || {
             Some(RTCDataChannelInit {
