@@ -62,6 +62,12 @@ impl NeoTorrentSession {
     ///   `state_dir`, so torrents resume automatically on next launch.
     /// - Accepts incoming peer connections (UPnP-forwarded when possible).
     pub async fn new(download_dir: PathBuf, state_dir: PathBuf) -> Result<Self, SessionError> {
+        // GUI apps get a 256 open-file soft limit. Peer sockets exhaust it at
+        // launch, and then librqbit's and AppKit's own file opens fail too.
+        match librqbit::try_increase_nofile_limit() {
+            Ok(limit) => tracing::info!("open file limit: {limit}"),
+            Err(e) => tracing::warn!("couldn't raise open file limit: {e:#}"),
+        }
         Self::start(download_dir, state_dir, true).await
     }
 
