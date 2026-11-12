@@ -84,7 +84,8 @@ struct ContentView: View {
     }
 
     private var torrentList: some View {
-        ScrollView {
+        let playerName = VideoPlayer.resolve(prefs.videoPlayer)?.name
+        return ScrollView {
             VStack(spacing: 10) {
                 ForEach(store.torrents, id: \.id) { t in
                     TorrentRow(
@@ -103,6 +104,7 @@ struct ContentView: View {
                         files: store.files[t.id] ?? [],
                         playURL: store.playableURLs[t.id],
                         isPlaying: store.playingTorrentID == t.id,
+                        playerName: playerName,
                         onPlay: { store.togglePlayback(id: t.id) },
                         poster: posters.image(for: t.infoHash)
                     )
@@ -158,6 +160,7 @@ struct TorrentRow: View {
     let files: [TorrentFile]
     let playURL: URL?
     let isPlaying: Bool
+    let playerName: String?
     let onPlay: () -> Void
     let poster: NSImage?
 
@@ -305,7 +308,7 @@ struct TorrentRow: View {
                 Image(systemName: isPlaying ? "stop.fill" : "play.fill")
                     .foregroundStyle(isPlaying ? AnyShapeStyle(.red) : AnyShapeStyle(.primary))
             }
-            .help(isPlaying ? "Stop VLC" : TorrentStore.vlcBinary == nil ? "Stream in browser" : "Play in VLC")
+            .help(playHelp)
         }
         Button(action: onReveal) {
             Image(systemName: "folder")
@@ -317,6 +320,11 @@ struct TorrentRow: View {
             Image(systemName: "trash")
         }
         .help("Remove torrent")
+    }
+
+    private var playHelp: String {
+        if let playerName { return isPlaying ? "Stop \(playerName)" : "Play in \(playerName)" }
+        return playURL?.isFileURL == true ? "Open in default app" : "Stream in browser"
     }
 
     private var iconName: String {
