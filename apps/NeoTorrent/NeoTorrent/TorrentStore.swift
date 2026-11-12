@@ -32,14 +32,6 @@ final class TorrentStore {
     @ObservationIgnored private var lastBadge = ""
     @ObservationIgnored private var sleepActivity: NSObjectProtocol?
 
-    static let vlcBinary: URL? = {
-        guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "org.videolan.vlc") else {
-            return nil
-        }
-        let binary = app.appendingPathComponent("Contents/MacOS/VLC")
-        return FileManager.default.isExecutableFile(atPath: binary.path) ? binary : nil
-    }()
-
     private var downloading: [TorrentSnapshot] { torrents.filter { !$0.isFinished && $0.state == .live } }
 
     func start(sessionHolder: SessionHolder, prefs: Preferences, posters: PosterStore) {
@@ -95,12 +87,16 @@ final class TorrentStore {
             if let url = URL(string: "\(base)/\(encoded)") {
                 playable[t.id] = url
             }
+            // Completed files play from disk so any player can open them.
+            let complete = media.downloaded == media.length
             let ext = (media.path as NSString).pathExtension.lowercased()
-            if needsPoster.contains(t.infoHash), media.downloaded > 0, PosterStore.posterExtensions.contains(ext),
-               let folder = try? session.outputFolder(id: t.id) {
+            let wantsPoster = needsPoster.contains(t.infoHash) && media.downloaded > 0
+                && PosterStore.posterExtensions.contains(ext)
+            if complete || wantsPoster, let folder = try? session.outputFolder(id: t.id) {
                 let local = URL(fileURLWithPath: folder).appendingPathComponent(media.path)
                 if FileManager.default.fileExists(atPath: local.path) {
-                    posterSources[t.infoHash] = local
+                    if complete { playable[t.id] = local }
+                    if wantsPoster { posterSources[t.infoHash] = local }
                 }
             }
         }
@@ -215,13 +211,22 @@ final class TorrentStore {
         let wasPlaying = playingTorrentID == id
         stopPlayback()
         guard !wasPlaying, let url = playableURLs[id] else { return }
-        guard let binary = Self.vlcBinary else {
+        guard let player = VideoPlayer.resolve(prefs?.videoPlayer ?? "") else {
             NSWorkspace.shared.open(url)
             return
         }
+        guard let command = player.command(for: url) else {
+            NSWorkspace.shared.open([url], withApplicationAt: player.appURL, configuration: .init()) { _, error in
+                guard let error else { return }
+                Task { @MainActor in
+                    self.sessionHolder?.errorMessage = "Couldn't open in \(player.name): \(errorDetail(error))"
+                }
+            }
+            return
+        }
         let proc = Process()
-        proc.executableURL = binary
-        proc.arguments = [url.absoluteString, "--play-and-exit"]
+        proc.executableURL = command.executable
+        proc.arguments = command.arguments
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice
         proc.terminationHandler = { [proc] _ in

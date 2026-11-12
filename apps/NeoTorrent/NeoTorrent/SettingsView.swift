@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 @MainActor
 @Observable
@@ -10,6 +11,7 @@ final class Preferences {
     static let playSoundsKey = "preferences.playSounds"
     static let seedRatioLimitKey = "preferences.seedRatioLimit"
     static let preventSleepKey = "preferences.preventSleep"
+    static let videoPlayerKey = "preferences.videoPlayer"
 
     /// The FFI takes UInt32 bytes/sec; 4095 MB/s is the largest that fits.
     static let maxMBps = 4095.0
@@ -60,6 +62,10 @@ final class Preferences {
     var preventSleep: Bool {
         didSet { UserDefaults.standard.set(preventSleep, forKey: Self.preventSleepKey) }
     }
+    /// Bundle ID of the app media plays in. Empty = automatic.
+    var videoPlayer: String {
+        didSet { UserDefaults.standard.set(videoPlayer, forKey: Self.videoPlayerKey) }
+    }
 
     @ObservationIgnored private var session: NeoTorrentSession?
 
@@ -76,6 +82,7 @@ final class Preferences {
         // For bools, default to true if never set.
         self.playSounds = d.object(forKey: Self.playSoundsKey) as? Bool ?? true
         self.preventSleep = d.object(forKey: Self.preventSleepKey) as? Bool ?? true
+        self.videoPlayer = d.string(forKey: Self.videoPlayerKey) ?? ""
     }
 
     func attach(_ session: NeoTorrentSession) {
@@ -103,70 +110,116 @@ struct SettingsView: View {
 
     var body: some View {
         @Bindable var bindable = prefs
-        Form {
-            Section("Downloads") {
-                LabeledContent("Folder") {
-                    HStack {
-                        Text(prefs.downloadDir)
-                            .font(.system(.callout, design: .monospaced))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .textSelection(.enabled)
-                        Button("Choose…", action: chooseDir)
-                        Button("Show") {
-                            NSWorkspace.shared.selectFile(
-                                prefs.downloadDir,
-                                inFileViewerRootedAtPath: ""
-                            )
+        TabView {
+            Tab("General", systemImage: "gearshape") {
+                pane {
+                    Section("Downloads") {
+                        LabeledContent("Folder") {
+                            HStack {
+                                Text(prefs.downloadDir)
+                                    .font(.system(.callout, design: .monospaced))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .textSelection(.enabled)
+                                Button("Choose…", action: chooseDir)
+                                Button("Show") {
+                                    NSWorkspace.shared.selectFile(
+                                        prefs.downloadDir,
+                                        inFileViewerRootedAtPath: ""
+                                    )
+                                }
+                            }
                         }
+                        Text("New torrents are saved here. Existing torrents keep their location.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Section("Behavior") {
+                        Toggle("Play sound effects", isOn: $bindable.playSounds)
+                        Toggle("Prevent sleep while downloading", isOn: $bindable.preventSleep)
                     }
                 }
-                Text("New torrents are saved here. Existing torrents keep their location.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
-            Section("Bandwidth") {
-                numberField("Max download", value: $bindable.downloadMBps, unit: "MB/s")
-                numberField("Max upload", value: $bindable.uploadMBps, unit: "MB/s")
-                Text("0 = unlimited. Applies immediately, session-wide.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            Tab("Transfers", systemImage: "arrow.up.arrow.down") {
+                pane {
+                    Section("Bandwidth") {
+                        numberField("Max download", value: $bindable.downloadMBps, unit: "MB/s")
+                        numberField("Max upload", value: $bindable.uploadMBps, unit: "MB/s")
+                        Text("0 = unlimited. Applies immediately, session-wide.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Section("Seeding") {
+                        numberField("Stop seeding at ratio", value: $bindable.seedRatioLimit, unit: "×")
+                        Text("Pauses a completed torrent once it has uploaded this many times its size since it was last started. 0 = seed indefinitely.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
 
-            Section("Seeding") {
-                numberField("Stop seeding at ratio", value: $bindable.seedRatioLimit, unit: "×")
-                Text("Pauses a completed torrent once it has uploaded this many times its size since it was last started. 0 = seed indefinitely.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            Tab("Playback", systemImage: "play.rectangle") {
+                pane {
+                    Section {
+                        LabeledContent("Video player") {
+                            HStack {
+                                Picker("Video player", selection: $bindable.videoPlayer) {
+                                    Text("Automatic").tag("")
+                                    ForEach(playerChoices, id: \.bundleID) { player in
+                                        Text(player.name).tag(player.bundleID)
+                                    }
+                                }
+                                .labelsHidden()
+                                .fixedSize()
+                                Button("Choose…", action: choosePlayer)
+                            }
+                        }
+                        Text("Automatic picks VLC, IINA, or mpv (in that order) if installed, otherwise the system default. Other apps may only play completed downloads.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
 
-            Section("Behavior") {
-                Toggle("Play sound effects", isOn: $bindable.playSounds)
-                Toggle("Prevent sleep while downloading", isOn: $bindable.preventSleep)
-            }
-
-            Section("System") {
-                defaultAppRow(
-                    label: "magnet: links",
-                    isDefault: magnetIsDefault,
-                    currentHandler: DefaultAppHelper.currentMagnetHandlerName(),
-                    action: setMagnetDefault
-                )
-                defaultAppRow(
-                    label: ".torrent files",
-                    isDefault: torrentIsDefault,
-                    currentHandler: DefaultAppHelper.currentTorrentHandlerName(),
-                    action: setTorrentDefault
-                )
-                Text("macOS may prompt for confirmation the first time.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            Tab("System", systemImage: "macwindow") {
+                pane {
+                    Section("Default apps") {
+                        defaultAppRow(
+                            label: "magnet: links",
+                            isDefault: magnetIsDefault,
+                            currentHandler: DefaultAppHelper.currentMagnetHandlerName(),
+                            action: setMagnetDefault
+                        )
+                        defaultAppRow(
+                            label: ".torrent files",
+                            isDefault: torrentIsDefault,
+                            currentHandler: DefaultAppHelper.currentTorrentHandlerName(),
+                            action: setTorrentDefault
+                        )
+                        Text("macOS may prompt for confirmation the first time.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
         }
-        .formStyle(.grouped)
-        .frame(width: 520)
-        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private func pane(@ViewBuilder _ content: () -> some View) -> some View {
+        let form = Form(content: content)
+            .formStyle(.grouped)
+            .scrollDisabled(true)
+            .frame(width: 520)
+            .fixedSize(horizontal: false, vertical: true)
+        if #available(macOS 26, *) {
+            form.scrollEdgeEffectStyle(.hard, for: .top)
+        } else {
+            form
+        }
     }
 
     private func defaultAppRow(
@@ -230,6 +283,26 @@ struct SettingsView: View {
         panel.directoryURL = URL(fileURLWithPath: prefs.downloadDir)
         if panel.runModal() == .OK, let url = panel.url {
             prefs.downloadDir = url.path
+        }
+    }
+
+    private var playerChoices: [VideoPlayer] {
+        var players = VideoPlayer.installedKnown
+        if !players.contains(where: { $0.bundleID == prefs.videoPlayer }),
+           let chosen = VideoPlayer.installed(prefs.videoPlayer) {
+            players.append(chosen)
+        }
+        return players
+    }
+
+    private func choosePlayer() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose video player"
+        panel.allowedContentTypes = [.applicationBundle]
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        if panel.runModal() == .OK, let url = panel.url, let bundleID = Bundle(url: url)?.bundleIdentifier {
+            prefs.videoPlayer = bundleID
         }
     }
 
