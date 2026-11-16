@@ -30,6 +30,7 @@ final class TorrentStore {
     @ObservationIgnored private var ratioPausedIDs: Set<UInt64> = []
     @ObservationIgnored private var didInitialLoad = false
     @ObservationIgnored private var lastBadge = ""
+    @ObservationIgnored private var fileProgress: [UInt64: Progress] = [:]
     @ObservationIgnored private var sleepActivity: NSObjectProtocol?
 
     private var downloading: [TorrentSnapshot] { torrents.filter { !$0.isFinished && $0.state == .live } }
@@ -131,6 +132,7 @@ final class TorrentStore {
         didInitialLoad = true
         enforceSeedRatio()
         updateDockBadge()
+        updateFileProgress()
         updateSleepPrevention()
     }
 
@@ -181,13 +183,19 @@ final class TorrentStore {
     func revealInFinder(id: UInt64) {
         guard let session = sessionHolder?.session,
               let folder = try? session.outputFolder(id: id) else { return }
-        let torrentFiles = files[id] ?? []
-        let path = torrentFiles.count == 1
-            ? (folder as NSString).appendingPathComponent(torrentFiles[0].path)
-            : folder
+        let path = rootPath(id: id, folder: folder)
         if !NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "") {
             NSWorkspace.shared.open(URL(fileURLWithPath: folder))
         }
+    }
+
+    /// The torrent's top-level item on disk: its file for single-file
+    /// torrents, else `folder` itself.
+    private func rootPath(id: UInt64, folder: String) -> String {
+        let torrentFiles = files[id] ?? []
+        return torrentFiles.count == 1
+            ? (folder as NSString).appendingPathComponent(torrentFiles[0].path)
+            : folder
     }
 
     private func perform(
@@ -295,6 +303,42 @@ final class TorrentStore {
         guard badge != lastBadge else { return }
         lastBadge = badge
         NSApp.dockTile.badgeLabel = badge.isEmpty ? nil : badge
+    }
+
+    /// Publish each unfinished download's progress (live or paused) on its
+    /// top-level item so Finder and the Dock's Downloads stack draw a
+    /// progress bar on it.
+    private func updateFileProgress() {
+        let active = Dictionary(uniqueKeysWithValues: torrents
+            .filter { !$0.isFinished && ($0.state == .live || $0.isPaused) }
+            .map { ($0.id, $0) })
+        for (id, progress) in fileProgress where active[id] == nil {
+            progress.unpublish()
+            fileProgress[id] = nil
+        }
+        for t in active.values where t.totalBytes > 0 {
+            let progress: Progress
+            if let existing = fileProgress[t.id] {
+                progress = existing
+            } else {
+                guard let folder = try? sessionHolder?.session?.outputFolder(id: t.id) else { continue }
+                let path = rootPath(id: t.id, folder: folder)
+                // librqbit creates the files once the torrent starts; retry next poll.
+                guard FileManager.default.fileExists(atPath: path) else { continue }
+                progress = Progress.discreteProgress(totalUnitCount: Int64(t.totalBytes))
+                progress.kind = .file
+                progress.fileOperationKind = .downloading
+                progress.fileURL = URL(fileURLWithPath: path)
+                progress.isCancellable = false
+                progress.publish()
+                fileProgress[t.id] = progress
+            }
+            progress.totalUnitCount = Int64(t.totalBytes)
+            progress.completedUnitCount = Int64(t.downloadedBytes)
+            if progress.isPaused != t.isPaused {
+                t.isPaused ? progress.pause() : progress.resume()
+            }
+        }
     }
 
     private func updateSleepPrevention() {
