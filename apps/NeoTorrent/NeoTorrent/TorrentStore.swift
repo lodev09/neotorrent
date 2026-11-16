@@ -30,8 +30,6 @@ final class TorrentStore {
     @ObservationIgnored private var ratioPausedIDs: Set<UInt64> = []
     @ObservationIgnored private var didInitialLoad = false
     @ObservationIgnored private var lastBadge = ""
-    @ObservationIgnored private var lastDockPercent: Int?
-    @ObservationIgnored private var dockProgress: DockProgressView?
     @ObservationIgnored private var fileProgress: [UInt64: Progress] = [:]
     @ObservationIgnored private var sleepActivity: NSObjectProtocol?
 
@@ -133,7 +131,7 @@ final class TorrentStore {
         if didInitialLoad && !newlyAdded.isEmpty { playSound("Pop") }
         didInitialLoad = true
         enforceSeedRatio()
-        updateDockTile()
+        updateDockBadge()
         updateFileProgress()
         updateSleepPrevention()
     }
@@ -300,49 +298,34 @@ final class TorrentStore {
         }
     }
 
-    /// Badge = active download count; progress bar = combined progress of
-    /// those downloads.
-    private func updateDockTile() {
-        let active = downloading
-        let badge = active.isEmpty ? "" : "\(active.count)"
-        let total = active.reduce(UInt64(0)) { $0 + $1.totalBytes }
-        let done = active.reduce(UInt64(0)) { $0 + $1.downloadedBytes }
-        let percent: Int? = active.isEmpty ? nil : total > 0 ? Int(Double(done) / Double(total) * 100) : 0
-        guard badge != lastBadge || percent != lastDockPercent else { return }
+    private func updateDockBadge() {
+        let badge = downloading.isEmpty ? "" : "\(downloading.count)"
+        guard badge != lastBadge else { return }
         lastBadge = badge
-        lastDockPercent = percent
-
-        let tile = NSApp.dockTile
-        tile.badgeLabel = badge.isEmpty ? nil : badge
-        if let percent {
-            if dockProgress == nil {
-                let view = DockProgressView(frame: NSRect(origin: .zero, size: tile.size))
-                tile.contentView = view
-                dockProgress = view
-            }
-            dockProgress?.fraction = Double(percent) / 100
-        } else {
-            tile.contentView = nil
-            dockProgress = nil
-        }
-        tile.display()
+        NSApp.dockTile.badgeLabel = badge.isEmpty ? nil : badge
     }
 
-    /// Publish each active download's progress on its top-level item so
-    /// Finder and the Dock's Downloads stack draw a progress bar on it.
+    /// Publish each unfinished download's progress (live or paused) on its
+    /// top-level item so Finder and the Dock's Downloads stack draw a
+    /// progress bar on it.
     private func updateFileProgress() {
-        let active = Dictionary(uniqueKeysWithValues: downloading.map { ($0.id, $0) })
+        let active = Dictionary(uniqueKeysWithValues: torrents
+            .filter { !$0.isFinished && ($0.state == .live || $0.isPaused) }
+            .map { ($0.id, $0) })
         for (id, progress) in fileProgress where active[id] == nil {
             progress.unpublish()
             fileProgress[id] = nil
         }
         for t in active.values where t.totalBytes > 0 {
-            if fileProgress[t.id] == nil {
+            let progress: Progress
+            if let existing = fileProgress[t.id] {
+                progress = existing
+            } else {
                 guard let folder = try? sessionHolder?.session?.outputFolder(id: t.id) else { continue }
                 let path = rootPath(id: t.id, folder: folder)
                 // librqbit creates the files once the torrent starts; retry next poll.
                 guard FileManager.default.fileExists(atPath: path) else { continue }
-                let progress = Progress(totalUnitCount: Int64(t.totalBytes))
+                progress = Progress.discreteProgress(totalUnitCount: Int64(t.totalBytes))
                 progress.kind = .file
                 progress.fileOperationKind = .downloading
                 progress.fileURL = URL(fileURLWithPath: path)
@@ -350,8 +333,11 @@ final class TorrentStore {
                 progress.publish()
                 fileProgress[t.id] = progress
             }
-            fileProgress[t.id]?.totalUnitCount = Int64(t.totalBytes)
-            fileProgress[t.id]?.completedUnitCount = Int64(t.downloadedBytes)
+            progress.totalUnitCount = Int64(t.totalBytes)
+            progress.completedUnitCount = Int64(t.downloadedBytes)
+            if progress.isPaused != t.isPaused {
+                t.isPaused ? progress.pause() : progress.resume()
+            }
         }
     }
 
@@ -379,28 +365,5 @@ final class TorrentStore {
             trigger: nil
         )
         UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
-    }
-}
-
-/// App icon with a progress bar over its lower part, for the Dock tile.
-private final class DockProgressView: NSView {
-    var fraction = 0.0
-
-    override func draw(_ dirtyRect: NSRect) {
-        NSApp.applicationIconImage.draw(in: bounds)
-        // Covers the artwork's bottom edge (~10% up from the tile's).
-        let height = bounds.height * 0.1
-        let track = NSRect(
-            x: bounds.width * 0.2, y: bounds.height * 0.09,
-            width: bounds.width * 0.6, height: height
-        )
-        NSColor(white: 0.5, alpha: 0.5).setFill()
-        NSBezierPath(roundedRect: track, xRadius: height / 2, yRadius: height / 2).fill()
-        var fill = track
-        // At least a dot, so 0% still reads as a progress bar.
-        fill.size.width = height + (track.width - height) * fraction
-        // Matches the in-app downloading color.
-        NSColor.systemBlue.setFill()
-        NSBezierPath(roundedRect: fill, xRadius: height / 2, yRadius: height / 2).fill()
     }
 }
