@@ -233,3 +233,72 @@ jobs:
               --generate-notes \
               "${ASSETS[@]}"
           fi
+
+  update-cask:
+    name: Update Homebrew cask
+    needs: [build, publish]
+    if: github.repository == 'lodev09/neotorrent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: main
+
+      - name: Sync cask to the published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Expected a release version in MAJOR.MINOR.PATCH format" >&2
+            exit 1
+          fi
+
+          RELEASE=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,assets)
+          if jq -e '.isDraft or .isPrerelease' <<< "$RELEASE" >/dev/null; then
+            echo "The Homebrew cask tracks stable, published releases."
+            exit 0
+          fi
+          DIGEST=$(jq -r --arg asset "NeoTorrent-$VERSION.dmg" \
+            '.assets[] | select(.name == $asset) | .digest // empty' <<< "$RELEASE")
+          if [[ ! "$DIGEST" =~ ^sha256:([a-f0-9]{64})$ ]]; then
+            echo "Missing SHA-256 digest for NeoTorrent-$VERSION.dmg" >&2
+            exit 1
+          fi
+          SHA256="${BASH_REMATCH[1]}"
+
+          CASK=Casks/neotorrent.rb
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          # Retry against the new tip if main moves while the job is running.
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git checkout --detach FETCH_HEAD
+            CURRENT_VERSION=$(sed -nE 's/^  version "([0-9]+\.[0-9]+\.[0-9]+)"$/\1/p' "$CASK")
+            if [[ -z "$CURRENT_VERSION" ]] || ! grep -Eq '^  sha256 "[a-f0-9]{64}"$' "$CASK"; then
+              echo "Expected a version and SHA-256 in $CASK" >&2
+              exit 1
+            fi
+            if [[ $(printf '%s\n' "$CURRENT_VERSION" "$VERSION" | sort -V | tail -n 1) != "$VERSION" ]]; then
+              echo "The cask already tracks a newer release ($CURRENT_VERSION)."
+              exit 0
+            fi
+
+            sed -E -e "s/^  version \".*\"$/  version \"$VERSION\"/" \
+              -e "s/^  sha256 \".*\"$/  sha256 \"$SHA256\"/" "$CASK" > "$CASK.tmp"
+            mv "$CASK.tmp" "$CASK"
+            if git diff --quiet -- "$CASK"; then
+              exit 0
+            fi
+            git add -- "$CASK"
+            git commit -m "Update Homebrew cask to $VERSION"
+            if git push origin HEAD:refs/heads/main; then
+              exit 0
+            fi
+            echo "Cask push failed (attempt $attempt of 3)." >&2
+          done
+          exit 1
