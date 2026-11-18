@@ -85,17 +85,20 @@ workspace version (`Cargo.toml`) is bumped alongside the marketing version.
 the chosen value, increments the build counter by one, commits (with
 `Cargo.lock`), tags, and pushes `main` + the tag atomically — which kicks off
 the [release workflow](.github/workflows/release.yml) (build → sign → notarize
-→ DMG + SHA-256 checksum → GitHub release).
+→ DMG + SHA-256 checksum → GitHub release → bump the Homebrew cask in
+[`lodev09/homebrew-tap`](https://github.com/lodev09/homebrew-tap)).
 
 ```sh
 just ship           # prompts; default = patch bump from latest tag
 just ship 0.2.0     # explicit version
 ```
 
-Requirements: clean working tree on `main`, in sync with `origin/main`, and the
-secrets `APPLE_*` configured on the repo for signing /
-notarization. To do a manual dry-run build without publishing, trigger the
-workflow from the Actions tab with `publish: false`. Manual runs with
+Requirements: clean working tree on `main`, in sync with `origin/main`, the
+secrets `APPLE_*` configured on the repo for signing / notarization, and
+`HOMEBREW_TAP_TOKEN` (fine-grained PAT with Contents read/write on
+`lodev09/homebrew-tap`) for the cask bump. To do a manual dry-run build
+without publishing, trigger the workflow from the Actions tab with
+`publish: false`. Manual runs with
 `publish: true` must be started on a tag; existing release assets are never
 overwritten.
 

@@ -7,6 +7,14 @@ everything.
 
 <img alt="NeoTorrent" src="preview.png" height="500" />
 
+## Install
+
+```sh
+brew install --cask lodev09/tap/neotorrent
+```
+
+Or grab the DMG from [Releases](https://github.com/lodev09/neotorrent/releases).
+
 ## Features
 
 - Add torrents via magnet URI, `.torrent` file, drag-and-drop, or paste
