@@ -233,3 +233,42 @@ jobs:
               --generate-notes \
               "${ASSETS[@]}"
           fi
+
+  bump-cask:
+    name: Bump Homebrew cask
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - name: Download DMG artifact
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: NeoTorrent-${{ needs.build.outputs.version }}-dmg
+
+      - name: Check out tap
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: lodev09/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Update cask
+        run: |
+          SHA256="$(cut -d' ' -f1 "NeoTorrent-$VERSION.dmg.sha256")"
+          CASK="tap/Casks/neotorrent.rb"
+          sed -i -E \
+            -e "s/^  version \"[^\"]*\"$/  version \"$VERSION\"/" \
+            -e "s/^  sha256 \"[^\"]*\"$/  sha256 \"$SHA256\"/" \
+            "$CASK"
+          grep -q "^  version \"$VERSION\"$" "$CASK"
+          grep -q "^  sha256 \"$SHA256\"$" "$CASK"
+
+      - name: Push cask
+        working-directory: tap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "neotorrent $VERSION"
+          git push
